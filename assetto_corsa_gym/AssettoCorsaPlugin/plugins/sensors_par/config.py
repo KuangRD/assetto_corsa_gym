@@ -19,12 +19,12 @@ class Config(object):
         self.vjoy_executed_by_server = False
 
         # Alternative python interpreter
-        self.enable_alternative_python_interpreter = False
+        self.enable_alternative_python_interpreter = True
         # config_python_env_name: Name of the Anaconda environment for constructing the path (default: "p309").
         self.config_python_env_name = "p309"
         # config_python_executable: If provided, uses this path; if None, builds it as:
         #   "<user_home>\AppData\Local\anaconda3\envs\<env_name>\python.exe"
-        self.config_python_executable = None
+        self.config_python_executable = r"C:\Users\freedom\anaconda3\envs\p309\python.exe"
         self.screen_capture_worker = "screen_capture_worker.py"
 
         # signal events
@@ -33,7 +33,7 @@ class Config(object):
         #
         # Camera capture configuration
         #
-        self.screen_capture_enable = False
+        self.screen_capture_enable = True
         # This should be a multiple of the resolution set in Assetto Corsa to avoid cropping and padding
         self.final_image_width = 640 // 2       # 320 Final image width in pixels
         self.final_image_height = 480  // 2     # 240 Final image height in pixels
