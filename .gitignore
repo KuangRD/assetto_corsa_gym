@@ -4,6 +4,8 @@ data/data_sets
 archive
 *.ptorch
 *.pkl?
+*.pkl
+*.pth
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
