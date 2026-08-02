@@ -21,7 +21,7 @@ class Agent:
                  batch_size=256, memory_size=1_000_000,
                  update_interval=1, start_steps=10000, log_interval=10, checkpoint_freq=0,
                  eval_interval=5000, num_eval_episodes=5, seed=0, use_offline_buffer=False, offline_buffer_size=1_000_000,
-                 wandb_logger=None, save_final_buffer=False):
+                 wandb_logger=None, save_final_buffer=False, random_steps=None):
 
         # Environment.
         self._env = env
@@ -65,6 +65,11 @@ class Agent:
         self._batch_size = batch_size
         self._update_interval = update_interval
         self._start_steps = start_steps
+        # By default, preserve the original behavior: collect random actions
+        # until learning starts.  Warm-start runs can set random_steps=0 to use
+        # loaded policy weights immediately while still delaying updates until
+        # the replay buffer has enough target-domain transitions.
+        self._random_steps = start_steps if random_steps is None else random_steps
         self._log_interval = log_interval
         self._eval_interval = eval_interval
         self._num_eval_episodes = num_eval_episodes
@@ -77,6 +82,7 @@ class Agent:
         logger.info(f'batch_size: {batch_size}')
         logger.info(f'update_interval: {update_interval}')
         logger.info(f'start_steps: {start_steps}')
+        logger.info(f'random_steps: {self._random_steps}')
         logger.info(f'log_interval: {log_interval}')
         logger.info(f'eval_interval: {eval_interval}')
         logger.info(f'num_eval_episodes: {num_eval_episodes}')
@@ -104,10 +110,8 @@ class Agent:
 
     def run(self):
         try:
-            while True:
+            while self._steps < self._num_steps:
                 self.train_episode()
-                if self._steps > self._num_steps:
-                    break
                 if self._eval_interval and (self._steps % self._eval_interval == 0):
                     logger.info("Evaluating")
                     self.evaluate()
@@ -143,9 +147,9 @@ class Agent:
             state = self._env.reset()
             step_start_time = time.perf_counter()
 
-            while (not done):
+            while (not done) and self._steps < self._num_steps:
                 start_profile = time.perf_counter()
-                if self._start_steps > self._steps:
+                if self._random_steps > self._steps:
                     action = self._env.action_space.sample()
                 else:
                     action, _ = self._algo.explore(state)

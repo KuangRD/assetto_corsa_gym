@@ -15,6 +15,9 @@ if sys.platform.startswith("win"):
 logger = logging.getLogger(__name__)
 
 MAX_MSG_SIZE = 2**18
+MANAGEMENT_CONNECT_MAX_ATTEMPTS = 12
+MANAGEMENT_CONNECT_RETRY_DELAY = 1.0
+MANAGEMENT_CONNECT_MAX_RETRY_DELAY = 10.0
 
 class SimulationManagement:
     def __init__(self, config):
@@ -25,15 +28,38 @@ class SimulationManagement:
         self.max_msg_size = 2**20
 
     def send_message(self, message, wait_response=False):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect((self.host, self.port))
-            s.sendall(message.encode())
-            s.settimeout(5)
-            if wait_response:
-                data = s.recv(self.max_msg_size).decode()
-                return data
-            else:
-                return None
+        retry_delay = MANAGEMENT_CONNECT_RETRY_DELAY
+        for attempt in range(1, MANAGEMENT_CONNECT_MAX_ATTEMPTS + 1):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    # Apply the timeout before connect so a stalled management
+                    # server cannot block an online training run indefinitely.
+                    s.settimeout(5)
+                    s.connect((self.host, self.port))
+                    s.sendall(message.encode())
+                    if wait_response:
+                        return s.recv(self.max_msg_size).decode()
+                    return None
+            except OSError as exc:
+                if attempt == MANAGEMENT_CONNECT_MAX_ATTEMPTS:
+                    logger.exception(
+                        "Simulation management request failed after %d attempts",
+                        attempt,
+                    )
+                    raise
+                logger.warning(
+                    "Simulation management request failed (%s), retrying in %.1fs "
+                    "(%d/%d)",
+                    exc,
+                    retry_delay,
+                    attempt,
+                    MANAGEMENT_CONNECT_MAX_ATTEMPTS,
+                )
+                time.sleep(retry_delay)
+                retry_delay = min(
+                    retry_delay * 2,
+                    MANAGEMENT_CONNECT_MAX_RETRY_DELAY,
+                )
 
     def send_reset(self):
         logger.info("sending reset to simulation management server")

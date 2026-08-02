@@ -231,6 +231,9 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         self.enable_out_of_track_calculation = enable_out_of_track_calculation
         self._max_episode_steps = max_episode_steps
         self.enable_low_speed_termination = self.config.enable_low_speed_termination
+        self.low_speed_termination_seconds = self.config.get(
+            "low_speed_termination_seconds", TERMINAL_JUDGE_TIMEOUT
+        )
         self.max_gap = max_gap
         self.gap_const = gap_const
         self.penalize_gap = penalize_gap
@@ -575,7 +578,7 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
             # else:
             #     logger.info(f"Low speed. Will terminate in {self.termination_counter}...")
         else:
-            self.termination_counter = int(TERMINAL_JUDGE_TIMEOUT * self.ctrl_rate)
+            self.termination_counter = int(self.low_speed_termination_seconds * self.ctrl_rate)
 
         # check gap
         if self.max_gap and np.abs(gap) > self.max_gap:
@@ -662,7 +665,7 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
 
         self.client.reset(self.send_reset_at_start)
 
-        self.termination_counter = int(TERMINAL_JUDGE_TIMEOUT * self.ctrl_rate)
+        self.termination_counter = int(self.low_speed_termination_seconds * self.ctrl_rate)
         self.episode_saved = False
         self.is_out_of_track = False
         self.current_actions = np.array( [0.0, -1.0, -1.0] )

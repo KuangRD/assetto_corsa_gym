@@ -121,6 +121,7 @@ def simulation_management_server_task():
         ss.listen(5)
 
         while True:
+            cs = None
             try:
                 logger.info("[MGMT SERV] Waiting for connections.")
                 (cs, addr) = ss.accept()
@@ -153,10 +154,15 @@ def simulation_management_server_task():
                         logger.info("[MGMT SERV] Unknown command: {}".format(data))
                         break
             except ConnectionResetError:
-                cs.close()
                 logger.exception("[MGMT SERV] Client disconnected")
             except:
                 logger.exception("[MGMT SERV] An error occurred")
+            finally:
+                # Each management command uses a short-lived connection. Close
+                # the accepted socket explicitly instead of relying on object
+                # replacement/garbage collection between reset requests.
+                if cs:
+                    cs.close()
     except:
         logger.exception("[OPP SERV] An error occurred")
 

@@ -26,6 +26,11 @@ def parse_args(hardcode=None):
     parser = argparse.ArgumentParser(description="Description of your program.")
     parser.add_argument("--config", default="config.yml", type=str, help="Path to configuration file")
     parser.add_argument("--load_path", type=str, default=None, help="Path to load the model from (default: None)")
+    parser.add_argument(
+        "--weights_only",
+        action="store_true",
+        help="Load model weights as initialization without loading a replay buffer or resuming the step counter",
+    )
     parser.add_argument("--algo", type=str, default="sac", help="Algorithm type (default: sac)")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("overrides", nargs=argparse.REMAINDER, help="Any key=value arguments to override config values")
@@ -47,7 +52,7 @@ def main():
     config = OmegaConf.merge(config, cli_conf)
 
     if config.work_dir is not None:
-        work_dir = os.path.abspath(args.work_dir) + os.sep + config.track + os.sep + config.car + os.sep
+        work_dir = os.path.abspath(config.work_dir) + os.sep
         os.makedirs(work_dir, exist_ok=True)
     else:
         work_dir = "outputs" + os.sep + datetime.now().strftime('%Y%m%d_%H%M%S.%f')[:-3]
@@ -130,7 +135,7 @@ def main():
         agent.pre_train()
 
     if args.load_path is not None:
-        load_buffer = False if args.test else True
+        load_buffer = not (args.test or args.weights_only)
         agent.load(args.load_path, load_buffer=load_buffer)
 
     if args.test:
