@@ -174,11 +174,14 @@ class Client():
     def respond_to_server(self):
         if not self.vjoy_executed_by_server:
             self.controls.apply_local_controls()
-        else:
-            if not self.socket:
-                return
-            self.controls["server_steps"] = self.state["steps"] # send back
-            self.reply_to_server(self.controls.export())
+
+        # Always reply to the AC plugin. When vJoy runs locally, the plugin
+        # ignores the control values but still uses the training progress
+        # fields to update its on-screen HUD.
+        if not self.socket:
+            return
+        self.controls["server_steps"] = self.state["steps"] # send back
+        self.reply_to_server(self.controls.export())
 
     def reset(self, send_reset=True):
         if self.socket:
@@ -281,6 +284,10 @@ class DriverControls(dict):
         self["enable_gear_shift"] = 0
         self["shift_up"] = 0
         self["shift_down"] = 0
+        self["training_active"] = False
+        self["training_total_steps"] = 0
+        self["training_current_step"] = 0
+        self["training_elapsed_seconds"] = 0.0
 
     def set_controls(self, steer, acc, brake, enable_gear_shift=False, shift_up=False, shift_down=False):
         self["steer"] = steer
@@ -289,6 +296,12 @@ class DriverControls(dict):
         self["enable_gear_shift"] = enable_gear_shift
         self["shift_up"] = shift_up
         self["shift_down"] = shift_down
+
+    def set_training_progress(self, total_steps, current_step, elapsed_seconds):
+        self["training_active"] = True
+        self["training_total_steps"] = int(total_steps)
+        self["training_current_step"] = int(current_step)
+        self["training_elapsed_seconds"] = float(elapsed_seconds)
 
     def apply_local_controls(self):
         self.local_controls.set_controls(steer=self["steer"],

@@ -439,6 +439,14 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         self.client.controls.set_controls(steer=self.actions[0], acc=self.actions[1], brake=self.actions[2])
         self.client.respond_to_server()
 
+    def set_training_progress(self, total_steps, current_step, elapsed_seconds):
+        """Attach training progress to the next control packet sent to AC."""
+        self.client.controls.set_training_progress(
+            total_steps=total_steps,
+            current_step=current_step,
+            elapsed_seconds=elapsed_seconds,
+        )
+
     def step(self, action=None):
         """
         If actions is None, the the policy should set the actions before by calling set_actions

@@ -71,6 +71,45 @@ telemetry = Telemetry()
 
 DONE_STATIC_INFO = False
 alternative_interpreter = None
+training_total_label = None
+training_current_label = None
+training_time_label = None
+training_percent_label = None
+last_training_progress_text = None
+
+def format_training_duration(elapsed_seconds):
+    elapsed_seconds = max(0, int(elapsed_seconds))
+    hours = elapsed_seconds // 3600
+    minutes = (elapsed_seconds % 3600) // 60
+    seconds = elapsed_seconds % 60
+    return "{:02d}:{:02d}:{:02d}".format(hours, minutes, seconds)
+
+def update_training_progress_hud():
+    global last_training_progress_text
+
+    progress = ego_server.training_progress
+    if not progress["active"] or progress["total_steps"] <= 0:
+        progress_text = ("Total steps: --", "Current step: --",
+                         "Training time: --:--:--", "Progress: --")
+    else:
+        total_steps = progress["total_steps"]
+        current_step = min(progress["current_step"], total_steps)
+        percentage = (100.0 * current_step) / total_steps
+        progress_text = (
+            "Total steps: {:,}".format(total_steps),
+            "Current step: {:,}".format(current_step),
+            "Training time: {}".format(format_training_duration(progress["elapsed_seconds"])),
+            "Progress: {:5.1f}%".format(percentage),
+        )
+
+    if progress_text == last_training_progress_text:
+        return
+
+    ac.setText(training_total_label, progress_text[0])
+    ac.setText(training_current_label, progress_text[1])
+    ac.setText(training_time_label, progress_text[2])
+    ac.setText(training_percent_label, progress_text[3])
+    last_training_progress_text = progress_text
 
 def reset_car():
     ac.ext_resetCar()
@@ -171,6 +210,7 @@ def simulation_management_server_task():
 # about the track. (Tested on track "Magione")
 def acMain(ac_version):
     global car, track, static_info, opponents, ego_server, telemetry, config, controls, alternative_interpreter
+    global training_total_label, training_current_label, training_time_label, training_percent_label
 
     #Only for specific configurations of the track
     conf = ac.getTrackConfiguration(0)
@@ -197,8 +237,22 @@ def acMain(ac_version):
 
 
     logger.info("[MAIN] Started.")
-    appWindow = ac.newApp("sensors_par")
-    ac.setSize(appWindow, 333, 173)
+    appWindow = ac.newApp("RL Training Progress")
+    ac.setSize(appWindow, 360, 155)
+    ac.setBackgroundOpacity(appWindow, 0.78)
+    ac.setVisible(appWindow, 1)
+
+    training_total_label = ac.addLabel(appWindow, "Total steps: --")
+    training_current_label = ac.addLabel(appWindow, "Current step: --")
+    training_time_label = ac.addLabel(appWindow, "Training time: --:--:--")
+    training_percent_label = ac.addLabel(appWindow, "Progress: --")
+
+    progress_labels = [training_total_label, training_current_label,
+                       training_time_label, training_percent_label]
+    for index, label in enumerate(progress_labels):
+        ac.setPosition(label, 18, 36 + index * 25)
+        ac.setFontSize(label, 18)
+        ac.setFontColor(label, 1.0, 1.0, 1.0, 1.0)
 
     try:
         ego_server = EgoServer(config, car, controls, telemetry, track=track)
@@ -284,3 +338,4 @@ def acUpdate(deltaT):
 
     # call ego server tick
     ego_server.tick()
+    update_training_progress_hud()

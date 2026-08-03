@@ -81,6 +81,12 @@ class EgoServer:
         self.total_errors_out_of_sync = 0
         self.total_steps = 0
         self.socket_open = False
+        self.training_progress = {
+            "active": False,
+            "total_steps": 0,
+            "current_step": 0,
+            "elapsed_seconds": 0.0,
+        }
 
         # ----- Create the named events -----
         if self.config.screen_capture_enable:
@@ -151,9 +157,25 @@ class EgoServer:
                         self.profiler.add_event("reply")
                         data = json.loads(data)
                         self.current_client.update(data)
-                        if data["server_steps"] != self.car["steps"]:
+                        if data.get("server_steps") != self.car["steps"]:
                             self.car.total_errors_out_of_sync += 1
                             #self.car["steps"] = data["server_steps"] # set the server steps to the client steps to get back in sync
+                        if data.get("training_active", False):
+                            # Replace the whole dictionary so the AC render
+                            # thread never observes a partially updated value.
+                            self.training_progress = {
+                                "active": True,
+                                "total_steps": int(data.get("training_total_steps", 0)),
+                                "current_step": int(data.get("training_current_step", 0)),
+                                "elapsed_seconds": float(data.get("training_elapsed_seconds", 0.0)),
+                            }
+                        elif "training_active" in data:
+                            self.training_progress = {
+                                "active": False,
+                                "total_steps": 0,
+                                "current_step": 0,
+                                "elapsed_seconds": 0.0,
+                            }
                         if self.controls:
                             self.controls.set_controls(steer=self.current_client["steer"],
                                                     acc=self.current_client["acc"],

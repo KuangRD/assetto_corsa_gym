@@ -5,6 +5,7 @@ from torch.utils.tensorboard import SummaryWriter
 import pickle
 from pathlib import Path
 from tqdm import tqdm
+from datetime import datetime
 
 from discor.replay_buffer import ReplayBuffer, EnsembleBuffer
 from discor.utils import RunningMeanStats
@@ -21,14 +22,19 @@ class Agent:
                  batch_size=256, memory_size=1_000_000,
                  update_interval=1, start_steps=10000, log_interval=10, checkpoint_freq=0,
                  eval_interval=5000, num_eval_episodes=5, seed=0, use_offline_buffer=False, offline_buffer_size=1_000_000,
-                 wandb_logger=None, save_final_buffer=False, random_steps=None):
+                 wandb_logger=None, save_final_buffer=False, random_steps=None,
+                 checkpoint_step_offset=0, stop_episode_at_eval_interval=False,
+                 evaluation_report_dir=None):
 
         # Environment.
         self._env = env
         self._test_env = test_env
         self.checkpoint_freq = checkpoint_freq
+        self.checkpoint_step_offset = checkpoint_step_offset
         self.wandb_logger = wandb_logger
         self.save_final_buffer = save_final_buffer
+        self.stop_episode_at_eval_interval = stop_episode_at_eval_interval
+        self.evaluation_report_dir = evaluation_report_dir
 
         self._env.seed(seed)
         self._test_env.seed(2**31-1-seed)
@@ -74,6 +80,8 @@ class Agent:
         self._eval_interval = eval_interval
         self._num_eval_episodes = num_eval_episodes
         self._start_time = time.time()
+        self._training_progress = None
+        self._last_evaluated_step = None
 
         self.best_lap_time = np.inf
         self.best_reward = -np.inf
@@ -109,13 +117,32 @@ class Agent:
             logger.info(f"loaded buffer from {path}. Number of steps: {len(self._replay_buffer)}")
 
     def run(self):
+        self._start_time = time.time()
+        initial_steps = min(self._steps, self._num_steps)
+        self._training_progress = tqdm(
+            total=self._num_steps,
+            initial=initial_steps,
+            unit=" step",
+            dynamic_ncols=True,
+            bar_format=(
+                "训练进度 | 总步数: {total_fmt} | 当前步数: {n_fmt} | "
+                "训练时长: {elapsed} | {bar} {percentage:3.0f}%"
+            ),
+        )
         try:
             while self._steps < self._num_steps:
                 self.train_episode()
-                if self._eval_interval and (self._steps % self._eval_interval == 0):
+                if (self._eval_interval
+                        and self._steps > 0
+                        and self._steps % self._eval_interval == 0
+                        and self._last_evaluated_step != self._steps):
                     logger.info("Evaluating")
-                    self.evaluate()
+                    eval_records = self.evaluate()
+                    self._last_evaluated_step = self._steps
+                    self.write_evaluation_report(eval_records)
         finally:
+            self._training_progress.close()
+            self._training_progress = None
             self.save(os.path.join(self._model_dir, 'final'), save_buffer=self.save_final_buffer)
 
     def update_model(self):
@@ -155,6 +182,16 @@ class Agent:
                     action, _ = self._algo.explore(state)
                 action_perf.append(time.perf_counter() - start_profile)
 
+                # The AC environment attaches this information to the control
+                # packet so the in-game plugin can render a training HUD.
+                set_training_progress = getattr(self._env, 'set_training_progress', None)
+                if set_training_progress is not None:
+                    set_training_progress(
+                        total_steps=self._num_steps,
+                        current_step=min(self._steps + 1, self._num_steps),
+                        elapsed_seconds=time.time() - self._start_time,
+                    )
+
                 # apply actions right away without blocking
                 self._env.set_actions(action)
 
@@ -176,6 +213,12 @@ class Agent:
                 else:
                     masked_done = done
 
+                milestone_boundary = (
+                    self.stop_episode_at_eval_interval
+                    and self._eval_interval
+                    and (self._steps + 1) % self._eval_interval == 0
+                )
+
                 if info['terminated']:
                     rb_done = True
                 else:
@@ -183,16 +226,24 @@ class Agent:
 
                 self._replay_buffer.append(
                     state, action, reward, next_state, masked_done,
-                    episode_done=rb_done)
+                    episode_done=(rb_done or milestone_boundary))
 
                 self._steps += 1
                 episode_steps += 1
                 episode_return += reward
                 state = next_state
 
+                if self._training_progress is not None:
+                    self._training_progress.update(1)
+
                 if self.checkpoint_freq and (self._steps % self.checkpoint_freq == 0):
                     logger.info(f"checkpointing model {self._steps} steps")
-                    self.save(os.path.join(self._model_dir, "checkpoints", f"step_{self._steps:08d}"), save_buffer=False)
+                    checkpoint_step = self._steps + self.checkpoint_step_offset
+                    self.save(os.path.join(self._model_dir, "checkpoints", f"step_{checkpoint_step:08d}"), save_buffer=False)
+
+                if milestone_boundary:
+                    logger.info(f"Reached evaluation boundary at {self._steps} continuation steps")
+                    break
         except TimeoutError:
             logger.exception("Agent TimeoutError")
         finally:
@@ -205,9 +256,13 @@ class Agent:
             self._writer.add_scalar(
                 'reward/train', self._train_return.get(), self._steps)
 
-        print(f'Episode: {self._episodes:<4}  '
-              f'Episode steps: {episode_steps:<4}  '
-              f'Return: {episode_return:<5.1f}')
+        episode_message = (f'Episode: {self._episodes:<4}  '
+                           f'Episode steps: {episode_steps:<4}  '
+                           f'Return: {episode_return:<5.1f}')
+        if self._training_progress is not None:
+            self._training_progress.write(episode_message)
+        else:
+            print(episode_message)
 
         ep_time = time.time() - ep_start_time
         ep_stats['total_steps'] = self._steps
@@ -252,25 +307,144 @@ class Agent:
         logger.info(f'Episode done. Took {ep_time:.2f}s.  Steps per episode: {episode_steps}. Buffer size: {len(self._replay_buffer)} fps: {episode_steps/ep_time:.2f}')
 
     def evaluate(self):
+        eval_records = []
+        previous_max_laps = getattr(self._test_env, "max_laps_number", None)
+        self._test_env.set_eval_mode()
         try:
-            total_return = 0.0
-            for _ in range(self._num_eval_episodes):
-                state = self._test_env.reset()
+            for trial in range(1, self._num_eval_episodes + 1):
+                completed_lap_times = []
+                termination_reason = "unknown"
+                info = {}
                 episode_return = 0.0
-                done = False
+                env_ep_stats = {}
+                try:
+                    state = self._test_env.reset()
+                    previous_lap_count = self._test_env.state["LapCount"]
+                    done = False
 
-                while (not done):
-                    action, entropies = self._algo.exploit(state)
-                    next_state, reward, done, info = self._test_env.step(action)
-                    self._test_env.states[-1]["entropies"] = entropies.cpu().numpy().item()
-                    episode_return += reward
-                    state = next_state
-                total_return += episode_return
-        except TimeoutError:
-            logger.exception("Agent TimeoutError")
+                    while not done:
+                        action, entropies = self._algo.exploit(state)
+                        next_state, reward, done, info = self._test_env.step(action)
+                        self._test_env.states[-1]["entropies"] = entropies.cpu().numpy().item()
+                        episode_return += reward
+                        state = next_state
+
+                        current_lap_count = self._test_env.state["LapCount"]
+                        if current_lap_count != previous_lap_count:
+                            lap_time = self._test_env.state["iLastTime"] / 1000.0
+                            if lap_time > 0:
+                                completed_lap_times.append(lap_time)
+                            previous_lap_count = current_lap_count
+
+                    if len(completed_lap_times) >= self._test_env.config.eval_number_of_laps:
+                        termination_reason = "target_laps_completed"
+                    elif self._test_env.state.get("out_of_track"):
+                        termination_reason = "out_of_track"
+                    elif self._test_env.state.get("going_backwards", 0) > 0:
+                        termination_reason = "going_backwards"
+                    elif info.get("terminated"):
+                        termination_reason = "terminated_before_lap_completion"
+                    else:
+                        termination_reason = "episode_ended"
+                except TimeoutError:
+                    logger.exception("Agent TimeoutError during evaluation trial %s", trial)
+                    termination_reason = "timeout"
+                finally:
+                    env_ep_stats = self._test_env.close()
+
+                record = dict(env_ep_stats if isinstance(env_ep_stats, dict) else {})
+                record.update(
+                    trial=trial,
+                    continuation_step=self._steps,
+                    total_step=self._steps + self.checkpoint_step_offset,
+                    eval_completed_laps=len(completed_lap_times),
+                    eval_lap_times=";".join(f"{lap_time:.3f}" for lap_time in completed_lap_times),
+                    eval_best_lap=min(completed_lap_times) if completed_lap_times else 0.0,
+                    termination_reason=termination_reason,
+                    policy_mode="deterministic",
+                    ep_reward=record.get("ep_reward", episode_return),
+                )
+                eval_records.append(record)
+                logger.info("Evaluation trial %s complete: %s", trial, record)
         finally:
-            env_ep_stats = self._env.close()
-            pd.DataFrame([env_ep_stats]).to_csv(os.path.join(self._log_dir, 'eval_summary.csv'), index=None)
+            self._test_env.max_laps_number = previous_max_laps
+
+        eval_dir = Path(self._log_dir) / "evaluations" / f"step_{self._steps + self.checkpoint_step_offset:08d}"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(eval_records).to_csv(eval_dir / "eval_summary.csv", index=False)
+        return eval_records
+
+    def write_evaluation_report(self, eval_records):
+        """Save a human-readable Markdown report for a training milestone."""
+        total_step = self._steps + self.checkpoint_step_offset
+        report_root = Path(self.evaluation_report_dir or self._log_dir)
+        report_root.mkdir(parents=True, exist_ok=True)
+        report_path = report_root / f"{total_step // 10000}万步训练效果评估.md"
+        eval_dir = Path(self._log_dir) / "evaluations" / f"step_{total_step:08d}"
+        checkpoint_dir = Path(self._model_dir) / "checkpoints" / f"step_{total_step:08d}"
+
+        completed = [int(record.get("eval_completed_laps", 0) or 0) for record in eval_records]
+        valid_trials = sum(value > 0 for value in completed)
+        lap_times = []
+        for record in eval_records:
+            raw_times = str(record.get("eval_lap_times", "") or "")
+            lap_times.extend(float(value) for value in raw_times.split(";") if value)
+
+        lines = [
+            f"# MX-5 Cup Silverstone GP {total_step // 10000} 万步训练效果评估",
+            "",
+            "## 评估概况",
+            "",
+            f"- 评估时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "- 车辆：`ks_mazda_mx5_cup`",
+            "- 赛道：`ks_silverstone-gp`",
+            "- 算法：SAC",
+            f"- 累计总步数：{total_step:,}",
+            f"- 本轮续训步数：{self._steps:,}",
+            f"- 模型 checkpoint：`{checkpoint_dir}`",
+            f"- 评估原始数据：`{eval_dir / 'eval_summary.csv'}`",
+            f"- 评估方式：确定性策略，共 {len(eval_records)} 次独立 trial",
+            "",
+            "## 逐次评估结果",
+            "",
+            "| Trial | 完成圈数 | 最佳有效圈速 | Steps | Reward | 平均速度 (m/s) | 最高速度 (m/s) | 终止原因 |",
+            "|---:|---:|---:|---:|---:|---:|---:|---|",
+        ]
+
+        for record in eval_records:
+            best_lap = float(record.get("eval_best_lap", 0.0) or 0.0)
+            best_lap_text = f"{best_lap:.3f} s" if best_lap > 0 else "DNF"
+            lines.append(
+                "| {trial} | {laps} | {lap} | {steps} | {reward:.1f} | {speed_mean:.2f} | {speed_max:.2f} | {reason} |".format(
+                    trial=int(record.get("trial", 0) or 0),
+                    laps=int(record.get("eval_completed_laps", 0) or 0),
+                    lap=best_lap_text,
+                    steps=int(record.get("ep_steps", 0) or 0),
+                    reward=float(record.get("ep_reward", 0.0) or 0.0),
+                    speed_mean=float(record.get("speed_mean", 0.0) or 0.0),
+                    speed_max=float(record.get("speed_max", 0.0) or 0.0),
+                    reason=record.get("termination_reason", "unknown"),
+                )
+            )
+
+        lines.extend([
+            "",
+            "## 汇总与结论",
+            "",
+            f"- 有效完圈 trial：{valid_trials}/{len(eval_records)}",
+            f"- 有效圈总数：{sum(completed)}",
+            f"- 最佳有效圈速：{min(lap_times):.3f} s" if lap_times else "- 最佳有效圈速：DNF（本节点未产生严格有效圈）",
+            f"- 平均有效圈速：{np.mean(lap_times):.3f} s" if lap_times else "- 平均有效圈速：无",
+            "",
+            "严格有效圈只统计本次评估进程中实际观察到 `LapCount` 跳变且 `iLastTime > 0` 的圈；不会采用 Assetto Corsa 跨 reset 残留的 `BestLap`。",
+            "",
+        ])
+
+        report_text = "\n".join(lines)
+        report_path.write_text(report_text, encoding="utf-8")
+        (eval_dir / report_path.name).write_text(report_text, encoding="utf-8")
+        logger.info("Saved evaluation report to %s", report_path)
+        return report_path
 
     def __del__(self):
         self._env.close()
