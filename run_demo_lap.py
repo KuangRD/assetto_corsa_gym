@@ -15,6 +15,7 @@ sys.path.extend(
 )
 
 import AssettoCorsaEnv.assettoCorsa as assetto_corsa
+from AssettoCorsaEnv.lap_timing import PhysicalLapTimer
 from discor.network import GaussianPolicy
 
 
@@ -63,6 +64,7 @@ def main():
 
     env = assetto_corsa.make_ac_env(cfg=config, work_dir=str(output_dir))
     env.set_eval_mode()
+    env.max_laps_number = None
 
     device = torch.device("cpu")
     policy = GaussianPolicy(
@@ -80,7 +82,8 @@ def main():
     termination_reason = "unknown"
     try:
         state = env.reset()
-        previous_lap_count = env.state["LapCount"]
+        lap_timer = PhysicalLapTimer(env.track_length)
+        lap_timer.reset_state(env.state)
         done = False
         while not done:
             state_tensor = torch.tensor(
@@ -93,19 +96,21 @@ def main():
             state, _, done, info = env.step(action)
             env.states[-1]["entropies"] = entropies.item()
 
-            current_lap_count = env.state["LapCount"]
-            if current_lap_count != previous_lap_count:
-                lap_time = env.state["iLastTime"] / 1000.0
-                if lap_time > 0:
-                    completed_lap_times.append(lap_time)
-                    logger.info(
-                        "Completed evaluation lap %d: %.3fs",
-                        len(completed_lap_times),
-                        lap_time,
-                    )
-                previous_lap_count = current_lap_count
+            lap_time = lap_timer.update_state(env.state)
+            if lap_time is not None:
+                completed_lap_times.append(lap_time)
+                logger.info(
+                    "Completed physical evaluation lap %d: %.3fs",
+                    len(completed_lap_times),
+                    lap_time,
+                )
+                if len(completed_lap_times) >= args.laps:
+                    termination_reason = "target_laps_completed"
+                    break
 
-        if len(completed_lap_times) >= args.laps:
+        if termination_reason == "target_laps_completed":
+            pass
+        elif len(completed_lap_times) >= args.laps:
             termination_reason = "target_laps_completed"
         elif env.state.get("out_of_track"):
             termination_reason = "out_of_track"

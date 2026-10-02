@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import interp1d
-from AssettoCorsaEnv.curvature import curvature_splines
+from .curvature import curvature_splines
 
 import logging
 logger = logging.getLogger(__name__)
@@ -63,7 +63,8 @@ class ReferenceLap:
     Can use any line. Just x,y are needed. Distance, yaw and curvature are calculated
     Optionally curvature could be from file and target_speed
 
-    Warning: the last point of the racing line should precede the first point to avoid discontinuities in the gap.
+    The racing line is treated as periodic when calculating curvature and
+    sampling look-ahead channels across the start/finish seam.
 
     racing_line
         array:
@@ -119,8 +120,10 @@ class ReferenceLap:
             logger.info("Using curvature from racing line file")
             curvatures = self.df["curvature"].values.reshape(-1,1)
         else:
-            logger.info("Calculating curvature")
-            curvatures = curvature_splines( self.ts[:,0],  self.ts[:,1] )
+            logger.info("Calculating periodic curvature")
+            curvatures = curvature_splines(
+                self.ts[:, 0], self.ts[:, 1], periodic=True
+            )
             curvatures = curvatures.reshape(-1,1)
         self.ts = np.concatenate([self.ts, curvatures], axis=1)
 
@@ -165,26 +168,38 @@ class ReferenceLap:
             returns: vector of vector_size with the channel interpolated by distance
 
         """
-        rl_dist = rl_dist.copy()
-        patch = 0
-        track_len = rl_dist[-1]
+        rl_dist = np.asarray(rl_dist, dtype=float)
+        channel = np.asarray(channel, dtype=float)
+        if rl_dist.ndim != 1 or channel.ndim != 1 or len(rl_dist) != len(channel):
+            raise ValueError("rl_dist and channel must be equal-length 1D arrays")
+        if len(rl_dist) < 2 or vector_size <= 0 or LA_dist < 0:
+            raise ValueError("invalid look-ahead sampling arguments")
 
-        if ((dist - track_len) > 50):
-            print("## look ahead was out of range!!! Will return a Zero Vector", dist, track_len)
-            assert ((dist - track_len) > 50), "distance was more than 50 meters bigger than the track len dist %f track_len %f" \
-                                               % (dist, track_len)
+        spacing = float(np.median(np.diff(rl_dist)))
+        if spacing <= 0:
+            raise ValueError("rl_dist must be strictly increasing")
 
-        start = dist
-        end = dist + LA_dist
-        segment = self.distSegment2Index(rl_dist, start, end)
+        # rl_dist is sampled at one-metre intervals and contains both 0 and
+        # the final sample, so its period is one spacing beyond the last
+        # coordinate (5804 m for Silverstone), not rl_dist[-1] (5803 m).
+        period = float(rl_dist[-1] - rl_dist[0] + spacing)
+        offsets = np.linspace(0.0, LA_dist, vector_size, endpoint=False)
+        sample_distances = rl_dist[0] + np.mod(
+            float(dist) - rl_dist[0] + offsets, period
+        )
 
-        if end > track_len:
-            patch = end - track_len
-            segment = np.concatenate( [segment, self.distSegment2Index(rl_dist, 0, patch)] )
-
-        vector = channel[segment]
-        vector = vector[0::len(vector) // vector_size]
-        vector = vector[0:vector_size]
+        # np.interp(period=...) interpolates smoothly between the final and
+        # first samples instead of introducing a start/finish discontinuity.
+        vector = np.interp(
+            sample_distances,
+            rl_dist,
+            channel,
+            period=period,
+        )
+        segment = np.searchsorted(rl_dist, sample_distances, side="right") - 1
+        segment = np.clip(segment, 0, len(rl_dist) - 1)
+        wrapped_start = np.mod(float(dist) - rl_dist[0], period)
+        patch = max(0.0, wrapped_start + LA_dist - period)
         return vector, segment, patch
 
     def get_curvature_segment(self, dist, LA_dist, vector_size):

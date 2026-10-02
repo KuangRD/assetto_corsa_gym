@@ -16,9 +16,29 @@ from pathlib import Path
 from AssettoCorsaEnv.ac_client import Client
 from AssettoCorsaEnv.track import Track
 from AssettoCorsaEnv.reference_lap import ReferenceLap
+from AssettoCorsaEnv.steering_smoothness import (
+    condition_steering_guards,
+    compute_effective_steer_rate_limit,
+    compute_distance_zone_weight,
+    extend_latched_recovery_weight,
+    compute_periodic_seam_weight,
+    compute_post_seam_weight,
+    compute_recovery_guard_weight,
+    compute_recovery_steering_target,
+    compute_seam_absolute_steer_limit,
+    compute_schedule_ramp,
+    compute_steering_smoothness_terms,
+    compute_straight_gate,
+    filter_steering_rate_command,
+    limit_accumulated_steering,
+    step_steering_toward_target,
+    update_recovery_guard_latch,
+)
 import AssettoCorsaEnv.sensors_ray_casting as sensors_ray_casting
 from AssettoCorsaEnv.sensors_ray_casting import MAX_RAY_LEN
 from AssettoCorsaEnv.gap import get_gap
+from AssettoCorsaEnv.lap_timing import physical_lap_times
+from AssettoCorsaEnv.control_state import has_low_speed_high_gear_conflict
 
 import torch
 
@@ -234,6 +254,17 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         self.low_speed_termination_seconds = self.config.get(
             "low_speed_termination_seconds", TERMINAL_JUDGE_TIMEOUT
         )
+        self.enable_start_gear_preflight = bool(
+            self.config.get("enable_start_gear_preflight", False))
+        self.start_gear_preflight_invalid_gear = int(
+            self.config.get("start_gear_preflight_invalid_gear", 7))
+        self.start_gear_preflight_max_speed = float(
+            self.config.get("start_gear_preflight_max_speed", 30.0))
+        self.start_gear_preflight_seconds = float(
+            self.config.get("start_gear_preflight_seconds", 10.0))
+        self.start_gear_preflight_steps = max(
+            1, int(round(
+                self.start_gear_preflight_seconds * self.ctrl_rate)))
         self.max_gap = max_gap
         self.gap_const = gap_const
         self.penalize_gap = penalize_gap
@@ -252,6 +283,287 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
 
         self.penalize_actions_diff = config.penalize_actions_diff
         self.penalize_actions_diff_coef = config.penalize_actions_diff_coef
+
+        self.enable_steering_smoothness_reward = bool(
+            config.get("enable_steering_smoothness_reward", False))
+        self.steer_command_penalty_coef = float(
+            config.get("steer_command_penalty_coef", 0.0))
+        self.steer_reversal_penalty_coef = float(
+            config.get("steer_reversal_penalty_coef", 0.0))
+        self.steer_rate_penalty_coef = float(
+            config.get("steer_rate_penalty_coef", 0.0))
+        self.steer_jerk_penalty_coef = float(
+            config.get("steer_jerk_penalty_coef", 0.0))
+        self.steer_global_reversal_penalty_coef = float(
+            config.get("steer_global_reversal_penalty_coef", 0.0))
+        self.steer_global_jerk_penalty_coef = float(
+            config.get("steer_global_jerk_penalty_coef", 0.0))
+        self.steer_global_chatter_penalty_coef = float(
+            config.get("steer_global_chatter_penalty_coef", 0.0))
+        self.steer_smooth_min_speed = float(
+            config.get("steer_smooth_min_speed", 30.0))
+        self.steer_smooth_full_speed = float(
+            config.get("steer_smooth_full_speed", 40.0))
+        self.steer_smooth_curvature_threshold = float(
+            config.get("steer_smooth_curvature_threshold", 0.0015))
+        self.steer_smooth_curvature_lookahead = float(
+            config.get("steer_smooth_curvature_lookahead", 75.0))
+        self.steer_smooth_curvature_samples = int(
+            config.get("steer_smooth_curvature_samples", 4))
+        self.steer_smooth_max_gap = float(
+            config.get("steer_smooth_max_gap", 3.0))
+        self.steer_smooth_ramp_start_step = int(
+            config.get("steer_smooth_ramp_start_step", 0))
+        self.steer_smooth_ramp_steps = int(
+            config.get("steer_smooth_ramp_steps", 0))
+        self.enable_dynamic_steer_rate_limit = bool(
+            config.get("enable_dynamic_steer_rate_limit", False))
+        self.straight_max_steer_rate = float(
+            config.get("straight_max_steer_rate", self.max_steer_rate))
+        self.dynamic_steer_rate_ramp_start_step = int(config.get(
+            "dynamic_steer_rate_ramp_start_step",
+            self.steer_smooth_ramp_start_step,
+        ))
+        self.dynamic_steer_rate_ramp_steps = int(config.get(
+            "dynamic_steer_rate_ramp_steps",
+            self.steer_smooth_ramp_steps,
+        ))
+        self.enable_seam_steering_guard = bool(
+            config.get("enable_seam_steering_guard", False))
+        self.enable_global_steering_reversal_guard = bool(
+            config.get("enable_global_steering_reversal_guard", False))
+        self.global_steer_reversal_damping = float(
+            config.get("global_steer_reversal_damping", 0.35))
+        self.global_steer_reversal_min_magnitude = float(
+            config.get("global_steer_reversal_min_magnitude", 0.25))
+        self.enable_steering_command_filter = bool(
+            config.get("enable_steering_command_filter", False))
+        self.steering_command_filter_alpha = float(
+            config.get("steering_command_filter_alpha", 0.8))
+        self.seam_guard_full_distance = float(
+            config.get("seam_guard_full_distance", 35.0))
+        self.seam_guard_fade_distance = float(
+            config.get("seam_guard_fade_distance", 100.0))
+        self.seam_guard_max_command = float(
+            config.get("seam_guard_max_command", 0.35))
+        self.seam_guard_reversal_damping = float(config.get(
+            "seam_guard_reversal_damping",
+            config.get("seam_guard_smoothing_alpha", 0.25),
+        ))
+        self.seam_guard_full_gap = float(
+            config.get("seam_guard_full_gap", 1.5))
+        self.seam_guard_release_gap = float(
+            config.get("seam_guard_release_gap", 2.5))
+        self.seam_guard_disable_with_tyres_out = bool(
+            config.get("seam_guard_disable_with_tyres_out", True))
+        self.seam_guard_release_min_tyres_out = int(
+            config.get("seam_guard_release_min_tyres_out", 2))
+        self.seam_recovery_exit_gap = float(
+            config.get("seam_recovery_exit_gap", 1.0))
+        self.seam_recovery_enter_gap = float(config.get(
+            "seam_recovery_enter_gap", self.seam_guard_release_gap))
+        self.seam_recovery_exit_hold_seconds = float(
+            config.get("seam_recovery_exit_hold_seconds", 0.5))
+        self.seam_recovery_exit_hold_steps = max(
+            1, int(round(
+                self.seam_recovery_exit_hold_seconds * self.ctrl_rate)))
+        self.enable_seam_absolute_steer_guard = bool(
+            config.get("enable_seam_absolute_steer_guard", False))
+        self.seam_absolute_guard_full_distance = float(config.get(
+            "seam_absolute_guard_full_distance", 180.0))
+        self.seam_absolute_guard_fade_distance = float(config.get(
+            "seam_absolute_guard_fade_distance", 300.0))
+        self.seam_absolute_steer_full_limit = float(
+            config.get("seam_absolute_steer_full_limit", 0.10))
+        self.seam_absolute_steer_fade_limit = float(
+            config.get("seam_absolute_steer_fade_limit", 0.18))
+        self.seam_absolute_steer_recovery_limit = float(
+            config.get("seam_absolute_steer_recovery_limit", 0.18))
+        self.seam_recovery_steer_kp = float(
+            config.get("seam_recovery_steer_kp", 0.04))
+        self.seam_recovery_steer_kd = float(
+            config.get("seam_recovery_steer_kd", 0.01))
+        self.seam_recovery_steer_rate = float(
+            config.get("seam_recovery_steer_rate", 300.0))
+        self.enable_seam_lane_keep_controller = bool(
+            config.get("enable_seam_lane_keep_controller", False))
+        self.seam_lane_keep_full_distance = float(config.get(
+            "seam_lane_keep_full_distance",
+            self.seam_absolute_guard_full_distance))
+        self.seam_lane_keep_fade_distance = float(config.get(
+            "seam_lane_keep_fade_distance",
+            self.seam_absolute_guard_fade_distance))
+        self.seam_emergency_recovery_fade_distance = float(config.get(
+            "seam_emergency_recovery_fade_distance",
+            self.seam_lane_keep_fade_distance))
+        self.targeted_straight_guard_zones = [
+            tuple(float(value) for value in zone)
+            for zone in config.get("targeted_straight_guard_zones", [])
+        ]
+        self.seam_reversal_penalty_multiplier = float(
+            config.get("seam_reversal_penalty_multiplier", 1.0))
+        self.seam_jerk_penalty_multiplier = float(
+            config.get("seam_jerk_penalty_multiplier", 1.0))
+        self._reward_training_step = 0
+        self._effective_max_steer_rate = float(self.max_steer_rate)
+        self._seam_guard_weight = 0.0
+        self._seam_guard_position_weight = 0.0
+        self._seam_guard_recovery_weight = 1.0
+        self._seam_recovery_latched = False
+        self._seam_recovery_safe_steps = 0
+        self._seam_absolute_steer_limit = 1.0
+        self._seam_absolute_guard_active = 0.0
+        self._seam_absolute_position_weight = 0.0
+        self._seam_lane_keep_position_weight = 0.0
+        self._seam_emergency_recovery_weight = 0.0
+        self._targeted_straight_guard_weight = 0.0
+        self._previous_seam_gap = None
+        self._seam_gap_rate = 0.0
+        self._seam_recovery_steer_target = 0.0
+        self._seam_recovery_controller_active = 0.0
+        self._previous_conditioned_steer_command = 0.0
+        self._previous_policy_steer_command = 0.0
+        self._global_reversal_guard_active = 0.0
+        self._steering_command_filter_initialized = False
+        self._steering_command_filter_active = 0.0
+        self._steering_command_pre_filter = 0.0
+
+        if not 0 < self.straight_max_steer_rate <= self.max_steer_rate:
+            raise ValueError(
+                "straight_max_steer_rate must be positive and no greater "
+                "than max_steer_rate")
+        if not 0 < self.seam_guard_max_command <= 1:
+            raise ValueError("seam_guard_max_command must be in (0, 1]")
+        if not 0 < self.seam_guard_reversal_damping <= 1:
+            raise ValueError(
+                "seam_guard_reversal_damping must be in (0, 1]")
+        if not 0 < self.global_steer_reversal_damping <= 1:
+            raise ValueError(
+                "global_steer_reversal_damping must be in (0, 1]")
+        if not 0 <= self.global_steer_reversal_min_magnitude <= 1:
+            raise ValueError(
+                "global_steer_reversal_min_magnitude must be in [0, 1]")
+        if not 0 < self.steering_command_filter_alpha <= 1:
+            raise ValueError(
+                "steering_command_filter_alpha must be in (0, 1]")
+        if self.seam_guard_fade_distance <= self.seam_guard_full_distance:
+            raise ValueError(
+                "seam_guard_fade_distance must exceed "
+                "seam_guard_full_distance")
+        if self.seam_guard_full_gap < 0:
+            raise ValueError("seam_guard_full_gap cannot be negative")
+        if self.seam_guard_release_gap <= self.seam_guard_full_gap:
+            raise ValueError(
+                "seam_guard_release_gap must exceed seam_guard_full_gap")
+        if self.seam_guard_release_min_tyres_out < 1:
+            raise ValueError(
+                "seam_guard_release_min_tyres_out must be at least one")
+        if not 0 <= self.seam_recovery_exit_gap < self.seam_recovery_enter_gap:
+            raise ValueError(
+                "seam_recovery_exit_gap must be non-negative and less than "
+                "seam_recovery_enter_gap")
+        compute_seam_absolute_steer_limit(
+            1.0,
+            self.seam_absolute_steer_full_limit,
+            self.seam_absolute_steer_fade_limit,
+            self.seam_absolute_steer_recovery_limit,
+        )
+        if (self.seam_absolute_guard_fade_distance
+                <= self.seam_absolute_guard_full_distance):
+            raise ValueError(
+                "seam_absolute_guard_fade_distance must exceed "
+                "seam_absolute_guard_full_distance")
+        if (self.seam_lane_keep_fade_distance
+                <= self.seam_lane_keep_full_distance):
+            raise ValueError(
+                "seam_lane_keep_fade_distance must exceed "
+                "seam_lane_keep_full_distance")
+        if (self.seam_emergency_recovery_fade_distance
+                <= self.seam_lane_keep_full_distance):
+            raise ValueError(
+                "seam_emergency_recovery_fade_distance must exceed "
+                "seam_lane_keep_full_distance")
+        if self.seam_recovery_steer_kp < 0 or self.seam_recovery_steer_kd < 0:
+            raise ValueError("seam recovery steering gains cannot be negative")
+        if self.seam_recovery_steer_rate <= 0:
+            raise ValueError("seam_recovery_steer_rate must be positive")
+        for zone in self.targeted_straight_guard_zones:
+            if len(zone) != 4:
+                raise ValueError(
+                    "each targeted straight guard zone needs four distances")
+            compute_distance_zone_weight(0.0, *zone)
+        if (self.seam_reversal_penalty_multiplier < 1
+                or self.seam_jerk_penalty_multiplier < 1):
+            raise ValueError("seam penalty multipliers must be at least one")
+
+        if self.enable_steering_smoothness_reward:
+            logger.info(
+                "Steering smoothness reward enabled: command=%g reversal=%g "
+                "rate=%g jerk=%g global_reversal=%g global_jerk=%g "
+                "global_chatter=%g "
+                "ramp=%s+%s",
+                self.steer_command_penalty_coef,
+                self.steer_reversal_penalty_coef,
+                self.steer_rate_penalty_coef,
+                self.steer_jerk_penalty_coef,
+                self.steer_global_reversal_penalty_coef,
+                self.steer_global_jerk_penalty_coef,
+                self.steer_global_chatter_penalty_coef,
+                self.steer_smooth_ramp_start_step,
+                self.steer_smooth_ramp_steps,
+            )
+        if self.enable_dynamic_steer_rate_limit:
+            logger.info(
+                "Dynamic straight steering rate limit enabled: %g -> %g deg/s",
+                self.max_steer_rate,
+                self.straight_max_steer_rate,
+            )
+        if self.enable_seam_steering_guard:
+            logger.info(
+                "Periodic seam steering guard enabled: full=%gm fade=%gm "
+                "command=%g reversal_damping=%g recovery_gap=%g-%gm "
+                "release_tyres=%d recovery_latch=%g->%gm/%gs "
+                "absolute=%s/%g-%gm/%g-%g recovery=%g "
+                "lane_keep=%s/%g-%gm emergency_fade=%gm pd=%g/%g/%gdeg_s "
+                "reversal_x=%g jerk_x=%g",
+                self.seam_guard_full_distance,
+                self.seam_guard_fade_distance,
+                self.seam_guard_max_command,
+                self.seam_guard_reversal_damping,
+                self.seam_guard_full_gap,
+                self.seam_guard_release_gap,
+                self.seam_guard_release_min_tyres_out,
+                self.seam_recovery_enter_gap,
+                self.seam_recovery_exit_gap,
+                self.seam_recovery_exit_hold_seconds,
+                self.enable_seam_absolute_steer_guard,
+                self.seam_absolute_guard_full_distance,
+                self.seam_absolute_guard_fade_distance,
+                self.seam_absolute_steer_full_limit,
+                self.seam_absolute_steer_fade_limit,
+                self.seam_absolute_steer_recovery_limit,
+                self.enable_seam_lane_keep_controller,
+                self.seam_lane_keep_full_distance,
+                self.seam_lane_keep_fade_distance,
+                self.seam_emergency_recovery_fade_distance,
+                self.seam_recovery_steer_kp,
+                self.seam_recovery_steer_kd,
+                self.seam_recovery_steer_rate,
+                self.seam_reversal_penalty_multiplier,
+                self.seam_jerk_penalty_multiplier,
+            )
+        if self.enable_global_steering_reversal_guard:
+            logger.info(
+                "Global strong steering reversal guard enabled: "
+                "damping=%g min_magnitude=%g",
+                self.global_steer_reversal_damping,
+                self.global_steer_reversal_min_magnitude,
+            )
+        if self.targeted_straight_guard_zones:
+            logger.info(
+                "Targeted straight steering guard zones enabled: %s",
+                self.targeted_straight_guard_zones,
+            )
 
         self.max_laps_number = self.config.max_laps_number
 
@@ -408,13 +720,264 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         if self.torch_device:
             self.racing_line_torch = torch.tensor(self.racing_line, device=self.torch_device, dtype=torch.float)
 
+    def _get_effective_max_steer_rate(self):
+        """Return the state-adaptive steering rate limit for this action."""
+        if not self.enable_dynamic_steer_rate_limit or not hasattr(self, "state"):
+            return float(self.max_steer_rate)
+        state = self.state
+        if not isinstance(state, dict) or "LapDist" not in state:
+            return float(self.max_steer_rate)
+        curvature = self.ref_lap.get_curvature_segment(
+            state["LapDist"],
+            self.steer_smooth_curvature_lookahead,
+            self.steer_smooth_curvature_samples,
+        )
+        straight_gate = compute_straight_gate(
+            speed_m_s=state.get("speed", 0.0),
+            gap_m=state.get("gap", self.steer_smooth_max_gap),
+            max_abs_curvature=float(np.max(np.abs(curvature))),
+            min_speed_m_s=self.steer_smooth_min_speed,
+            full_speed_m_s=self.steer_smooth_full_speed,
+            curvature_threshold=self.steer_smooth_curvature_threshold,
+            max_gap_m=self.steer_smooth_max_gap,
+        )
+        targeted_gate = self._targeted_straight_guard_weight * (
+            compute_straight_gate(
+                speed_m_s=state.get("speed", 0.0),
+                gap_m=state.get("gap", self.steer_smooth_max_gap),
+                max_abs_curvature=0.0,
+                min_speed_m_s=self.steer_smooth_min_speed,
+                full_speed_m_s=self.steer_smooth_full_speed,
+                curvature_threshold=self.steer_smooth_curvature_threshold,
+                max_gap_m=self.steer_smooth_max_gap,
+            ))
+        straight_gate = max(straight_gate, targeted_gate)
+        ramp = compute_schedule_ramp(
+            self._reward_training_step,
+            self.dynamic_steer_rate_ramp_start_step,
+            self.dynamic_steer_rate_ramp_steps,
+        )
+        return compute_effective_steer_rate_limit(
+            self.max_steer_rate,
+            self.straight_max_steer_rate,
+            straight_gate,
+            ramp,
+        )
+
     def preprocess_actions(self, actions, current_actions):
         if self.use_relative_actions:
-            # Fully vectorized update: scale each action by the adjusted per-channel rate limit.
-            new_actions = current_actions + actions * self.adjusted_controls_rate_limit[:, 1]
+            rate_limits = self.adjusted_controls_rate_limit[:, 1].copy()
+            self._effective_max_steer_rate = self._get_effective_max_steer_rate()
+            rate_limits[0] = (
+                self._effective_max_steer_rate /
+                self.ctrl_rate /
+                self.steering_scale_factor
+            )
+            new_actions = current_actions + actions * rate_limits
         else:
             new_actions = actions
+        self._seam_absolute_steer_limit = 1.0
+        self._seam_absolute_guard_active = 0.0
+        self._seam_recovery_steer_target = 0.0
+        self._seam_recovery_controller_active = 0.0
+        if (self.enable_seam_absolute_steer_guard
+                and self._seam_absolute_position_weight > 0.0):
+            self._seam_absolute_steer_limit = (
+                compute_seam_absolute_steer_limit(
+                    self._seam_absolute_position_weight,
+                    self.seam_absolute_steer_full_limit,
+                    self.seam_absolute_steer_fade_limit,
+                    self.seam_absolute_steer_recovery_limit,
+                    self._seam_recovery_latched,
+                ))
+        if (self.enable_seam_lane_keep_controller
+                and self._seam_lane_keep_position_weight > 0.0):
+            self._seam_recovery_steer_target = (
+                compute_recovery_steering_target(
+                    self.state.get("gap", 0.0),
+                    self._seam_gap_rate,
+                    self.seam_recovery_steer_kp,
+                    self.seam_recovery_steer_kd,
+                    self._seam_absolute_steer_limit,
+                ))
+            max_recovery_delta = (
+                self.seam_recovery_steer_rate /
+                self.ctrl_rate /
+                self.steering_scale_factor)
+            lane_keep_steer = step_steering_toward_target(
+                current_actions[0],
+                self._seam_recovery_steer_target,
+                max_recovery_delta,
+            )
+            new_actions[0] = (
+                self._seam_lane_keep_position_weight * lane_keep_steer
+                + (1.0 - self._seam_lane_keep_position_weight) *
+                new_actions[0])
+            self._seam_recovery_controller_active = 1.0
+        if (self.enable_seam_absolute_steer_guard
+                and self._seam_absolute_position_weight > 0.0):
+            limited_steer = limit_accumulated_steering(
+                current_actions[0],
+                new_actions[0],
+                self._seam_absolute_steer_limit,
+            )
+            self._seam_absolute_guard_active = float(
+                not np.isclose(limited_steer, new_actions[0]))
+            new_actions[0] = limited_steer
         return np.clip(new_actions, self.controls_min_values, self.controls_max_values)
+
+    def _condition_policy_actions(self, actions):
+        """Apply steering guards and optional low-pass rate filtering."""
+        conditioned = np.asarray(actions, dtype=float).copy()
+        self._seam_guard_weight = 0.0
+        self._seam_guard_position_weight = 0.0
+        self._seam_guard_recovery_weight = 1.0
+        self._seam_absolute_position_weight = 0.0
+        self._seam_lane_keep_position_weight = 0.0
+        self._seam_emergency_recovery_weight = 0.0
+        self._targeted_straight_guard_weight = 0.0
+        self._global_reversal_guard_active = 0.0
+        self._steering_command_filter_active = 0.0
+        if (self.enable_seam_steering_guard
+                and hasattr(self, "state")
+                and isinstance(self.state, dict)
+                and "LapDist" in self.state
+                and hasattr(self, "track_length")):
+            self._seam_guard_position_weight = compute_periodic_seam_weight(
+                self.state["LapDist"],
+                self.track_length,
+                self.seam_guard_full_distance,
+                self.seam_guard_fade_distance,
+            )
+            if self.targeted_straight_guard_zones:
+                self._targeted_straight_guard_weight = max(
+                    compute_distance_zone_weight(
+                        self.state["LapDist"], *zone)
+                    for zone in self.targeted_straight_guard_zones
+                )
+                self._seam_guard_position_weight = max(
+                    self._seam_guard_position_weight,
+                    self._targeted_straight_guard_weight,
+                )
+            if self.enable_seam_absolute_steer_guard:
+                self._seam_absolute_position_weight = (
+                    compute_post_seam_weight(
+                        self.state["LapDist"],
+                        self.track_length,
+                        self.seam_absolute_guard_full_distance,
+                        self.seam_absolute_guard_fade_distance,
+                    ))
+            if self.enable_seam_lane_keep_controller:
+                self._seam_lane_keep_position_weight = (
+                    compute_post_seam_weight(
+                        self.state["LapDist"],
+                        self.track_length,
+                        self.seam_lane_keep_full_distance,
+                        self.seam_lane_keep_fade_distance,
+                    ))
+                self._seam_emergency_recovery_weight = (
+                    compute_post_seam_weight(
+                        self.state["LapDist"],
+                        self.track_length,
+                        self.seam_lane_keep_full_distance,
+                        self.seam_emergency_recovery_fade_distance,
+                    ))
+            gap = self.state.get("gap", 0.0)
+            tyres_out = self.state.get("numberOfTyresOut", 0)
+            recovery_region_weight = max(
+                self._seam_guard_position_weight,
+                self._seam_absolute_position_weight,
+                self._seam_lane_keep_position_weight,
+                self._seam_emergency_recovery_weight,
+            )
+            if recovery_region_weight > 0.0:
+                if self._previous_seam_gap is None:
+                    self._seam_gap_rate = 0.0
+                else:
+                    self._seam_gap_rate = (
+                        (float(gap) - self._previous_seam_gap) *
+                        self.ctrl_rate)
+                self._previous_seam_gap = float(gap)
+                (self._seam_recovery_latched,
+                 self._seam_recovery_safe_steps) = (
+                    update_recovery_guard_latch(
+                        self._seam_recovery_latched,
+                        self._seam_recovery_safe_steps,
+                        gap,
+                        tyres_out,
+                        self.seam_recovery_enter_gap,
+                        self.seam_recovery_exit_gap,
+                        self.seam_guard_release_min_tyres_out,
+                        self.seam_recovery_exit_hold_steps,
+                        self.seam_guard_disable_with_tyres_out,
+                    ))
+                if self.enable_seam_lane_keep_controller:
+                    extended_weight = extend_latched_recovery_weight(
+                        self._seam_lane_keep_position_weight,
+                        self._seam_emergency_recovery_weight,
+                        self._seam_recovery_latched,
+                    )
+                    self._seam_lane_keep_position_weight = extended_weight
+                    if self.enable_seam_absolute_steer_guard:
+                        self._seam_absolute_position_weight = max(
+                            self._seam_absolute_position_weight,
+                            extended_weight,
+                        )
+                if self._seam_guard_position_weight > 0.0:
+                    if self._seam_recovery_latched:
+                        self._seam_guard_recovery_weight = 0.0
+                    else:
+                        self._seam_guard_recovery_weight = (
+                            compute_recovery_guard_weight(
+                                gap,
+                                tyres_out,
+                                self.seam_guard_full_gap,
+                                self.seam_guard_release_gap,
+                                False,
+                                self.seam_guard_release_min_tyres_out,
+                            ))
+                else:
+                    self._seam_guard_recovery_weight = 1.0
+            else:
+                self._seam_recovery_latched = False
+                self._seam_recovery_safe_steps = 0
+                self._previous_seam_gap = None
+                self._seam_gap_rate = 0.0
+            self._seam_guard_weight = (
+                self._seam_guard_position_weight *
+                self._seam_guard_recovery_weight)
+        conditioned[0], global_guard_active = condition_steering_guards(
+            conditioned[0],
+            self._previous_policy_steer_command,
+            self._previous_conditioned_steer_command,
+            self._seam_guard_weight,
+            self.seam_guard_max_command,
+            self.seam_guard_reversal_damping,
+            self.enable_global_steering_reversal_guard,
+            self.global_steer_reversal_damping,
+            self.global_steer_reversal_min_magnitude,
+        )
+        self._global_reversal_guard_active = float(global_guard_active)
+        self._steering_command_pre_filter = float(conditioned[0])
+        if self.enable_steering_command_filter:
+            if self._seam_guard_weight > 0.0:
+                # Preserve the separately validated seam clamp exactly and
+                # synchronize the EMA state for a clean fade-zone exit.
+                filtered = float(conditioned[0])
+            else:
+                filtered = filter_steering_rate_command(
+                    conditioned[0],
+                    self._previous_conditioned_steer_command,
+                    self.steering_command_filter_alpha,
+                    self._steering_command_filter_initialized,
+                )
+            self._steering_command_filter_active = float(
+                not np.isclose(filtered, conditioned[0]))
+            conditioned[0] = filtered
+            self._steering_command_filter_initialized = True
+        self._previous_conditioned_steer_command = float(conditioned[0])
+        self._previous_policy_steer_command = float(actions[0])
+        return conditioned
 
     def inverse_preprocess_actions(self, prev_abs_actions, current_abs_actions):
         if self.use_relative_actions:
@@ -429,11 +992,26 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         """
         Apply the actions to the sim right away. The step function can be called later
         """
-        # get state from the sim
-        self.raw_actions = actions.copy()
+        # Keep the original policy output for learning. The guarded command is
+        # logged as actions_0 and is the command actually applied to the car.
+        self.policy_actions = np.asarray(actions, dtype=float).copy()
+        self.raw_actions = self._condition_policy_actions(actions)
 
         # actions are deltas, update current controls
-        self.current_actions = self.preprocess_actions(actions, self.current_actions)
+        previous_actions = self.current_actions.copy()
+        self.current_actions = self.preprocess_actions(
+            self.raw_actions, self.current_actions)
+        if self.use_relative_actions:
+            executed_steer_delta = (
+                self._effective_max_steer_rate /
+                self.ctrl_rate /
+                self.steering_scale_factor)
+            self.raw_actions[0] = np.clip(
+                (self.current_actions[0] - previous_actions[0]) /
+                executed_steer_delta,
+                -1.0,
+                1.0,
+            )
         self.actions = self.current_actions
 
         self.client.controls.set_controls(steer=self.actions[0], acc=self.actions[1], brake=self.actions[2])
@@ -441,11 +1019,16 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
 
     def set_training_progress(self, total_steps, current_step, elapsed_seconds):
         """Attach training progress to the next control packet sent to AC."""
+        self.set_reward_training_step(current_step)
         self.client.controls.set_training_progress(
             total_steps=total_steps,
             current_step=current_step,
             elapsed_seconds=elapsed_seconds,
         )
+
+    def set_reward_training_step(self, current_step):
+        """Set the continuation step used by scheduled reward terms."""
+        self._reward_training_step = max(0, int(current_step))
 
     def step(self, action=None):
         """
@@ -471,6 +1054,38 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         # save input actions
         for i in range(self.action_dim):
             self.state[f'actions_{i:01d}'] = self.raw_actions[i]
+            self.state[f'policy_actions_{i:01d}'] = self.policy_actions[i]
+        self.state["effective_max_steer_rate"] = self._effective_max_steer_rate
+        self.state["seam_guard_weight"] = self._seam_guard_weight
+        self.state["seam_guard_position_weight"] = (
+            self._seam_guard_position_weight)
+        self.state["seam_guard_recovery_weight"] = (
+            self._seam_guard_recovery_weight)
+        self.state["seam_recovery_latched"] = float(
+            self._seam_recovery_latched)
+        self.state["seam_absolute_steer_limit"] = (
+            self._seam_absolute_steer_limit)
+        self.state["seam_absolute_position_weight"] = (
+            self._seam_absolute_position_weight)
+        self.state["seam_lane_keep_position_weight"] = (
+            self._seam_lane_keep_position_weight)
+        self.state["seam_emergency_recovery_weight"] = (
+            self._seam_emergency_recovery_weight)
+        self.state["targeted_straight_guard_weight"] = (
+            self._targeted_straight_guard_weight)
+        self.state["seam_absolute_guard_active"] = (
+            self._seam_absolute_guard_active)
+        self.state["seam_gap_rate"] = self._seam_gap_rate
+        self.state["seam_recovery_steer_target"] = (
+            self._seam_recovery_steer_target)
+        self.state["seam_recovery_controller_active"] = (
+            self._seam_recovery_controller_active)
+        self.state["global_reversal_guard_active"] = (
+            self._global_reversal_guard_active)
+        self.state["steering_command_pre_filter_0"] = (
+            self._steering_command_pre_filter)
+        self.state["steering_command_filter_active"] = (
+            self._steering_command_filter_active)
 
         # create obs
         obs, actions_diff = self.get_obs(state, self.states)
@@ -588,6 +1203,27 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         else:
             self.termination_counter = int(self.low_speed_termination_seconds * self.ctrl_rate)
 
+        if (self.enable_start_gear_preflight
+                and has_low_speed_high_gear_conflict(
+                    state.get('actualGear'),
+                    state.get('speed'),
+                    self.ep_steps,
+                    minimum_invalid_gear=(
+                        self.start_gear_preflight_invalid_gear),
+                    maximum_speed_m_s=self.start_gear_preflight_max_speed,
+                    maximum_episode_step=(
+                        self.start_gear_preflight_steps))):
+            logger.error(
+                "Invalid external control state: gear=%s at %.2f m/s and "
+                "episode_step=%s (LapDist=%.1f m). Automatic shifting is "
+                "being overridden; "
+                "return the H-shifter to neutral or disable its gear binding.",
+                state.get('actualGear'), state.get('speed'),
+                self.ep_steps, state.get('LapDist'))
+            buf_infos['terminated'] = True
+            buf_infos['control_state_invalid'] = True
+            done = 1
+
         # check gap
         if self.max_gap and np.abs(gap) > self.max_gap:
             logger.info(f"Race stopped. Gap too big ({gap})")
@@ -627,6 +1263,123 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         if self.penalize_actions_diff:
             action_difference_penalty = np.linalg.norm(actions_diff, ord=2)
             r -= action_difference_penalty * self.penalize_actions_diff_coef
+
+        state["reward_base"] = float(np.asarray(r))
+        state["steer_smooth_command_penalty"] = 0.0
+        state["steer_smooth_reversal_penalty"] = 0.0
+        state["steer_smooth_global_reversal_penalty"] = 0.0
+        state["steer_smooth_rate_penalty"] = 0.0
+        state["steer_smooth_jerk_penalty"] = 0.0
+        state["steer_smooth_global_jerk_penalty"] = 0.0
+        state["steer_smooth_chatter_strength"] = 0.0
+        state["steer_smooth_chatter_penalty"] = 0.0
+        state["steer_smooth_total_penalty"] = 0.0
+        state["steer_smooth_gate"] = 0.0
+        state["steer_smooth_ramp"] = 0.0
+        state["steer_smooth_seam_boost"] = 1.0
+
+        if self.enable_steering_smoothness_reward:
+            steering_command = float(state.get(
+                "policy_actions_0", state.get("actions_0", 0.0)))
+            previous_steering_command = steering_command
+            previous_previous_steering_command = steering_command
+            if self.states:
+                previous_steering_command = float(
+                    self.states[-1].get(
+                        "policy_actions_0",
+                        self.states[-1].get("actions_0", steering_command),
+                    ))
+            if len(self.states) >= 2:
+                previous_previous_steering_command = float(
+                    self.states[-2].get(
+                        "policy_actions_0",
+                        self.states[-2].get(
+                            "actions_0", previous_steering_command),
+                    ))
+
+            seam_weight = float(state.get("seam_guard_weight", 0.0))
+            seam_reversal_boost = (
+                1.0 + seam_weight *
+                (self.seam_reversal_penalty_multiplier - 1.0)
+            )
+            seam_jerk_boost = (
+                1.0 + seam_weight *
+                (self.seam_jerk_penalty_multiplier - 1.0)
+            )
+
+            steering_rate_deg_s = (
+                abs(float(actions_diff[0])) *
+                self.obs_channels_info["steerAngle"] *
+                self.ctrl_rate
+            )
+            curvature = self.ref_lap.get_curvature_segment(
+                state["LapDist"],
+                self.steer_smooth_curvature_lookahead,
+                self.steer_smooth_curvature_samples,
+            )
+            terms = compute_steering_smoothness_terms(
+                steering_command=steering_command,
+                previous_steering_command=previous_steering_command,
+                previous_previous_steering_command=(
+                    previous_previous_steering_command),
+                steering_rate_deg_s=steering_rate_deg_s,
+                speed_m_s=state["speed"],
+                gap_m=state["gap"],
+                max_abs_curvature=float(np.max(np.abs(curvature))),
+                training_step=self._reward_training_step,
+                command_coef=self.steer_command_penalty_coef,
+                reversal_coef=(
+                    self.steer_reversal_penalty_coef * seam_reversal_boost),
+                rate_coef=self.steer_rate_penalty_coef,
+                jerk_coef=(self.steer_jerk_penalty_coef * seam_jerk_boost),
+                global_reversal_coef=(
+                    self.steer_global_reversal_penalty_coef *
+                    seam_reversal_boost),
+                global_jerk_coef=(
+                    self.steer_global_jerk_penalty_coef * seam_jerk_boost),
+                global_chatter_coef=(
+                    self.steer_global_chatter_penalty_coef *
+                    seam_reversal_boost),
+                max_steer_rate_deg_s=self.max_steer_rate,
+                min_speed_m_s=self.steer_smooth_min_speed,
+                full_speed_m_s=self.steer_smooth_full_speed,
+                curvature_threshold=self.steer_smooth_curvature_threshold,
+                max_gap_m=self.steer_smooth_max_gap,
+                ramp_start_step=self.steer_smooth_ramp_start_step,
+                ramp_steps=self.steer_smooth_ramp_steps,
+                straight_gate_floor=(
+                    self._targeted_straight_guard_weight *
+                    compute_straight_gate(
+                        speed_m_s=state["speed"],
+                        gap_m=state["gap"],
+                        max_abs_curvature=0.0,
+                        min_speed_m_s=self.steer_smooth_min_speed,
+                        full_speed_m_s=self.steer_smooth_full_speed,
+                        curvature_threshold=(
+                            self.steer_smooth_curvature_threshold),
+                        max_gap_m=self.steer_smooth_max_gap,
+                    )),
+            )
+            r -= terms["total_penalty"]
+            state["steer_smooth_command_penalty"] = terms["command_penalty"]
+            state["steer_smooth_reversal_penalty"] = terms["reversal_penalty"]
+            state["steer_smooth_global_reversal_penalty"] = terms[
+                "global_reversal_penalty"]
+            state["steer_smooth_rate_penalty"] = terms["rate_penalty"]
+            state["steer_smooth_jerk_penalty"] = terms["jerk_penalty"]
+            state["steer_smooth_global_jerk_penalty"] = terms[
+                "global_jerk_penalty"]
+            state["steer_smooth_chatter_strength"] = terms[
+                "chatter_strength"]
+            state["steer_smooth_chatter_penalty"] = terms[
+                "chatter_penalty"]
+            state["steer_smooth_total_penalty"] = terms["total_penalty"]
+            state["steer_smooth_gate"] = terms["straight_gate"]
+            state["steer_smooth_ramp"] = terms["ramp"]
+            state["steer_rate_deg_s"] = terms["steering_rate_deg_s"]
+            state["steer_smooth_seam_boost"] = max(
+                seam_reversal_boost, seam_jerk_boost)
+
         r = r.reshape(-1)  # [N, 1] -> [N]
         return r
 
@@ -678,6 +1431,27 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         self.is_out_of_track = False
         self.current_actions = np.array( [0.0, -1.0, -1.0] )
         self.start_actions = np.array( [0.0, -1.0, -1.0] )
+        self._previous_conditioned_steer_command = 0.0
+        self._previous_policy_steer_command = 0.0
+        self._seam_guard_weight = 0.0
+        self._seam_guard_position_weight = 0.0
+        self._seam_guard_recovery_weight = 1.0
+        self._seam_recovery_latched = False
+        self._seam_recovery_safe_steps = 0
+        self._seam_absolute_steer_limit = 1.0
+        self._seam_absolute_guard_active = 0.0
+        self._seam_absolute_position_weight = 0.0
+        self._seam_lane_keep_position_weight = 0.0
+        self._seam_emergency_recovery_weight = 0.0
+        self._targeted_straight_guard_weight = 0.0
+        self._previous_seam_gap = None
+        self._seam_gap_rate = 0.0
+        self._seam_recovery_steer_target = 0.0
+        self._seam_recovery_controller_active = 0.0
+        self._global_reversal_guard_active = 0.0
+        self._steering_command_filter_initialized = False
+        self._steering_command_filter_active = 0.0
+        self._steering_command_pre_filter = 0.0
 
         self.ep_steps = 0  # reset steps after flushing the actions
 
@@ -842,17 +1616,22 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
                   "BestLap": ep['BestLap'].values[-1] / 1000.,
                   "terminated": ep.terminated.values[-1]
             }
-            for i, lapCount in enumerate(list(set( ep.LapCount ))):
-                r[f"LapNo_{i}"] = ep[ep.LapCount == lapCount]["iLastTime"].values[-1] / 1000 # to seconds
-            #  BestLap from the dictionary, excluding lap times that are 0 (incomplete laps)
-            r["ep_bestLapTime"] = min((time for key, time in r.items() if key.startswith("LapNo_") and time > 0), default=0)
+            measured_lap_times = physical_lap_times(
+                ep.to_dict(orient="records"), self.track_length)
+            # ACBestLap is session-global and survives car resets.  Keep it
+            # for diagnostics, but never use it to rank the current episode.
+            r["ACSessionBestLap"] = r["BestLap"]
+            r["BestLap"] = min(measured_lap_times, default=0)
+            for i, lap_time in enumerate(measured_lap_times):
+                r[f"LapNo_{i}"] = lap_time
+            r["ep_bestLapTime"] = r["BestLap"]
             if verbose:
                 logger.info(f"total_steps: {self.total_steps} ep_steps: {self.ep_steps} ep_reward: {r['ep_reward']:6.1f} "
                             f"LapDist: {self.state['LapDist']:6.2f} packages lost {number_packages_lost} BestLap: {r['BestLap']}")
-                for i, lapCount in enumerate(list(set( ep.LapCount ))):
+                for i, _ in enumerate(measured_lap_times):
                     logger.info(f"LapNo_{i}: {r[f'LapNo_{i}']:6.2f}")
                 logger.info(f"ep_bestLapTime: {r['ep_bestLapTime']:6.2f}")
-                logger.info(f"speed_mean: {r['speed_mean']:6.2f} speed_max: {r['speed_max']:6.2f} max_abs_gap: {gap_abs_max:6.2f} ep_laps: {len(set(ep.LapCount))}")
+                logger.info(f"speed_mean: {r['speed_mean']:6.2f} speed_max: {r['speed_max']:6.2f} max_abs_gap: {gap_abs_max:6.2f} ep_laps: {len(measured_lap_times)}")
                 if len(ep) > 10:
                     dt = np.diff( ep.currentTime.values )[1:]
                     logger.info(f"dt avr: {dt.mean():.3f} std: {dt.std():.3f} min: {dt.min():.3f} max: {dt.max():.3f}")
