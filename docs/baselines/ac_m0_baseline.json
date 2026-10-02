@@ -1,0 +1,54 @@
+{
+  "baseline_id": "ac_mx5cup_silverstone_20260802_174909",
+  "purpose": "RR-001 Assetto Corsa regression baseline before RaceRoom migration",
+  "repository_commit": "740ab48f5b93c853d254a6d21a44f18a7858d629",
+  "simulator": "assetto_corsa",
+  "car": "ks_mazda_mx5_cup",
+  "track": "ks_silverstone-gp",
+  "policy_mode": "deterministic",
+  "policy_seed": 0,
+  "metrics": {
+    "reset_completed": true,
+    "steps": 12076,
+    "minimum_required_steps": 1000,
+    "completed_laps": 3,
+    "lap_times_s": [152.392, 152.331, 152.293],
+    "best_lap_s": 152.293,
+    "mean_speed_mps": 37.53576216557045,
+    "max_speed_mps": 51.771419525146484,
+    "packages_lost": 0,
+    "termination_reason": "target_laps_completed"
+  },
+  "trace": {
+    "format": "parquet",
+    "rows": 12076,
+    "columns": 111
+  },
+  "artifacts": [
+    {
+      "path": "config.yml",
+      "bytes": 2689,
+      "sha256": "962066440160d48edc9a8f78d652d6d03225e312916c80949bea8895679cc090"
+    },
+    {
+      "path": "outputs/train_mx5cup_silverstone_400k_to_1m_resume/model/final/policy_net.pth",
+      "bytes": 663951,
+      "sha256": "32fd5363f1ceb21aa2abc6dc4380310087772743f87f6429386c3bf288d26c00"
+    },
+    {
+      "path": "outputs/eval_mx5cup_silverstone_final_1m_3laps_retry1/eval_summary.csv",
+      "bytes": 426,
+      "sha256": "10e8f96ad0895830dc892d72c12520ae88161588716d4e513398c5e7a8b67d68"
+    },
+    {
+      "path": "outputs/eval_mx5cup_silverstone_final_1m_3laps_retry1/laps/20260802_174909.772_states.parquet",
+      "bytes": 11510431,
+      "sha256": "17f37662e12e0d9cc687b847e8a76fd7eb4d214ccf16361ed0180db0f69368aa"
+    },
+    {
+      "path": "outputs/eval_mx5cup_silverstone_final_1m_3laps_retry1/laps/static_info.json",
+      "bytes": 1235,
+      "sha256": "fc1c956ff97c86ae6593ed742ea48b2e351d636d64cccea3c83411606211e4fd"
+    }
+  ]
+}

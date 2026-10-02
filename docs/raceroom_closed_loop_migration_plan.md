@@ -1,9 +1,25 @@
 # RaceRoom 闭环迁移完整计划
 
-状态：Draft v1（可执行）  
+状态：Execution v2（M2 控制路径 No-Go，闭环交付阻塞）<br>
 制定日期：2026-08-02  
+最近更新：2026-08-03<br>
 目标仓库：`assetto_corsa_gym`  
 首个交付范围：一个 RaceRoom 车辆、一个赛道布局、25 Hz 状态控制闭环、无对手、无排名/多人模式
+
+## 0. 当前执行结论（2026-08-03）
+
+| 范围 | 状态 | 结论 |
+|---|---|---|
+| M0 基线/范围 | 部分完成 | AC 基线、pilot 组合、配置与 feature flag 已冻结；RR-004 官方书面确认仍待完成 |
+| M1 只读遥测 | 首轮通过 | API 3.5 结构、稳定快照、约 375.6 Hz 实测、轴向验证、Parquet trace/replay 和 mapper 已完成；1 小时 soak 仍待执行 |
+| M2 vJoy 控制 | **No-Go** | Windows/AC 可正常消费 vJoy，但 RaceRoom `0.9.7.81` 不枚举或绑定 vJoy；已触发原计划停止条件 |
+| AC 回归 | 通过 | 同一 vJoy Device 1 的方向、油门、刹车、升降挡均获 AC 遥测回授，证明原 AC 控制链路未回归 |
+| RaceRoom 闭环 | 阻塞 | 未获得游戏正常识别的受支持控制设备前，不进入真实 `apply/reset/train` 闭环 |
+
+完整证据见 `docs/raceroom_vjoy_compatibility_20260803.md`，AC 实机回归原始结果见
+`outputs/ac_vjoy_smoke_test.json`。当前继续推进只读遥测、trace replay、通用 Core、
+AC adapter 回归和人工驾驶赛道资产；暂停依赖真实 RaceRoom 控制的标定、reset、
+闭环 Gym 和训练任务。
 
 ## 1. 目标与完成标准
 
@@ -19,13 +35,15 @@ SAC / DisCor / Replay Buffer
        |              |
  AssettoCorsa     RaceRoom
        |              |
- AC plugin        shared memory + vJoy
+ AC plugin        shared memory + supported input
+                                  (vJoy currently blocked)
 ```
 
 “完成”不是仅能读到遥测，而是同时满足：
 
 1. Python 可以稳定读取 RaceRoom 新遥测帧，并转换成版本化的统一状态结构。
-2. 策略动作可以通过 vJoy 控制方向、油门、刹车，控制方向和幅值经过标定。
+2. 策略动作可以通过 RaceRoom 正常识别的受支持控制设备控制方向、油门、刹车，
+   控制方向和幅值经过标定；当前 vJoy 路径已实测失败，不能计为完成。
 3. `env.step()` 以 25 Hz 工作，不重复消费旧帧，不因共享内存撕裂产生混合状态。
 4. `env.reset()` 有可观测、可超时、可重试的状态机；失败时安全停车并返回明确错误。
 5. 一个车辆/赛道组合具备 RaceRoom 原生参考线、左右边界、占用栅格和车辆控制标定。
@@ -294,7 +312,14 @@ alpha_rear  = atan2(v_lat - lr * yaw_rate, |v_long|)
 
 `legacy_ac_compat` 可以作为研究性 ablation，把前/后轴估算复制到左右轮，但不得作为默认 schema，也不得认为与 AC 真值等价。
 
-## 8. vJoy 控制与标定计划
+## 8. 控制与标定计划（vJoy 路径已阻塞）
+
+2026-08-03 实测已经触发本计划的 vJoy 停止条件。vJoy 2.1.9 Device 1 可由
+`joy.cpl` 和 Assetto Corsa 正常消费，但 RaceRoom 在前台绑定、持续输入、启动前持有
+设备、原生 `Custom Wheel` 方案和设备缓存重建后仍不接收轴或按钮。RaceRoom 新建
+方案保持 `Device Count="0"`，显式方案显示 `DISCONNECTED`。
+
+以下 8.1–8.3 保留为目标设计和 AC 可复用能力，不代表 RaceRoom 控制已获准继续。
 
 ### 8.1 通用化现有控制代码
 
@@ -308,6 +333,8 @@ alpha_rear  = atan2(v_lat - lr * yaw_rate, |v_long|)
 - 按钮使用 edge-trigger，避免换挡/复位按钮长按。
 
 ### 8.2 RaceRoom 控制标定脚本
+
+状态：暂停。只有满足 8.4 的解锁条件后才恢复。
 
 `raceroom_control_calibration.py` 分步完成：
 
@@ -325,6 +352,19 @@ alpha_rear  = atan2(v_lat - lr * yaw_rate, |v_long|)
 - session guard 失效：立即禁用所有动作。
 - 油门和刹车同时高于阈值时记录告警；可配置是否允许 trail braking overlap。
 - 第一次闭环测试必须在低速、无对手、宽阔赛道区域完成。
+
+### 8.4 控制路径解锁条件
+
+恢复 RR-203 及后续真实控制任务前，必须至少满足一项：
+
+1. KW Studios 书面确认并给出当前版本支持的虚拟/外部控制输入配置，按正常游戏
+   绑定完成端到端回授；或
+2. 用户单独批准一个表现为普通物理 USB HID 的硬件桥接方案，并完成新的安全、
+   合规和延迟评审。
+
+键盘扫描码只允许离线低速工程 spike。它是数字输入，不满足连续方向/油门/刹车的
+训练控制要求，不能用来绕过本决策门。不得把 DLL 注入、内存写入、反作弊绕过或
+在线模式测试列为候选解锁路线。
 
 ## 9. Reset 状态机
 
@@ -548,11 +588,11 @@ Safety:
 
 任务：
 
-- [ ] RR-001 记录当前 AC 环境一次 reset、1000 step 和一圈 trace，作为回归基线。
-- [ ] RR-002 冻结 pilot car/track/layout，记录 RaceRoom 游戏版本和 shared memory API 版本。
-- [ ] RR-003 确认 vJoy 设备、RaceRoom 控制绑定和单机测试模式。
+- [x] RR-001 记录当前 AC 环境一次 reset、1000 step 和一圈 trace，作为回归基线。
+- [x] RR-002 冻结 pilot car/track/layout，记录 RaceRoom 游戏版本和 shared memory API 版本。
+- [ ] RR-003 确认控制设备、RaceRoom 控制绑定和单机测试模式。**阻塞：vJoy No-Go；Track Test 已确认。**
 - [ ] RR-004 向 RaceRoom 发出离线研究使用确认请求。
-- [ ] RR-005 建立迁移配置、日志字段和 feature flag。
+- [x] RR-005 建立迁移配置、日志字段和 feature flag。
 
 退出条件：可以稳定启动 pilot session；官方 shared memory 可见；不存在立即阻断的控制/许可问题。
 
@@ -560,12 +600,12 @@ Safety:
 
 任务：
 
-- [ ] RR-101 按官方 v3.x header 实现 packed ctypes 结构。
-- [ ] RR-102 实现 memory map 生命周期、版本校验和一致性快照。
-- [ ] RR-103 实现 `raceroom_probe.py` 输出核心字段和更新频率统计。
-- [ ] RR-104 完成坐标轴、姿态、局部速度、角速度实验。
-- [ ] RR-105 建立原始 frame recorder 和 trace replay fixture。
-- [ ] RR-106 完成 `TelemetryFrame` mapper 与字段 availability 报告。
+- [x] RR-101 按官方 v3.x header 实现 packed ctypes 结构。
+- [x] RR-102 实现 memory map 生命周期、版本校验和一致性快照。
+- [x] RR-103 实现 `raceroom_probe.py` 输出核心字段和更新频率统计。
+- [x] RR-104 完成坐标轴、姿态、局部速度、角速度实验。
+- [x] RR-105 建立原始 frame recorder 和 trace replay fixture。
+- [x] RR-106 完成 `TelemetryFrame` mapper 与字段 availability 报告。
 
 退出条件：连续只读 1 小时无错误；核心字段单位/轴向已验证；世界坐标可用于二维赛道映射。
 
@@ -573,12 +613,15 @@ Safety:
 
 ### M2：vJoy 控制 spike 与安全互锁（3–5 天）
 
+状态：**No-Go（2026-08-03）**。控制 feature flag 保持关闭；详见
+`docs/raceroom_vjoy_compatibility_20260803.md`。
+
 任务：
 
-- [ ] RR-201 提取通用 vJoy backend。
-- [ ] RR-202 实现 RaceRoom session guard。
-- [ ] RR-203 开发控制标定脚本和车辆 calibration 文件。
-- [ ] RR-204 完成低速方向/油门/刹车闭环验证。
+- [ ] RR-201 提取通用 vJoy backend。部分完成：SDK wrapper、轴/按钮探针和显式方案生成器已实现；生产级 rate limit/safe-brake 接口未完成。
+- [x] RR-202 实现 RaceRoom session guard。
+- [ ] RR-203 开发控制标定脚本和车辆 calibration 文件。**等待控制路径解锁。**
+- [ ] RR-204 完成低速方向/油门/刹车闭环验证。键盘 spike 通过；vJoy 端到端失败，不能验收。
 - [ ] RR-205 实现 stale telemetry、异常退出和 NaN action 安全停车。
 - [ ] RR-206 测量动作到 raw feedback 延迟。
 
@@ -586,7 +629,13 @@ Safety:
 
 停止条件：若 vJoy 不被正常支持，或安全组件报警，则停止控制开发并联系 RaceRoom，不尝试绕过。
 
+**停止条件已触发。** 在 8.4 解锁前，RR-203～RR-206 及所有真实 RaceRoom
+控制依赖任务保持暂停。
+
 ### M3：通用 Core 与 Adapter 重构（6–9 天）
+
+执行约束：可继续 RR-301、RR-302、RR-303、RR-306、RR-307 的离线/AC/trace
+部分；RR-304 的 `apply` 只能保留禁用实现，不能宣称真实 RaceRoom adapter 完成。
 
 任务：
 
@@ -602,6 +651,8 @@ Safety:
 
 ### M4：Reset 和 episode 生命周期（4–7 天）
 
+状态：真实 RaceRoom reset 控制任务暂停；不依赖写入的状态机与 trace 测试可离线开发。
+
 任务：
 
 - [ ] RR-401 验证 RaceRoom 正常控制绑定支持的 reset/recover 行为。
@@ -613,6 +664,8 @@ Safety:
 退出条件：reset 成功率达到门槛，或确认模拟器限制并批准长 episode 备选设计。
 
 ### M5：首条 RaceRoom 赛道资产（6–10 天）
+
+执行约束：允许使用人工驾驶和只读遥测继续采集/构建资产，不依赖自动控制。
 
 任务：
 
@@ -626,6 +679,8 @@ Safety:
 退出条件：人工正常圈和出界样本达到资产验收指标；环境可输出完整 `raceroom_native_v1` observation。
 
 ### M6：闭环 Gym 与训练验证（5–8 天，不含长时间训练）
+
+状态：暂停，等待 8.4 控制路径解锁。
 
 任务：
 
@@ -667,12 +722,14 @@ Safety:
 | M7 稳定和交付 | 5–8 天 |
 | 合计 | 35–56 工程日 |
 
-按风险和部分任务重叠计算，日历时间约 **7–10 周**，不包含长时间强化学习训练的纯计算时间，也不包含等待官方回复的时间。
+原始估算为 **7–10 周**，不包含长时间强化学习训练的纯计算时间。该估算现已暂停：
+RaceRoom 控制输入成为外部依赖，在 8.4 解锁前不能给出可信的闭环交付日期。
+只读遥测、Core/AC 重构和人工赛道资产仍可按原工作包估算推进。
 
 所需环境：
 
 - Windows 机器、RaceRoom、pilot 车辆/赛道内容。
-- vJoy 独立设备 ID。
+- RaceRoom 正常识别的受支持控制设备。vJoy Device 1 已验证不满足当前版本要求。
 - 稳定 60 FPS 或更高的游戏设置；记录实际掉帧。
 - Python 训练环境和足够磁盘空间存储 raw trace/Parquet。
 - 推荐训练与游戏进程 CPU affinity 分离；GPU 训练不得让游戏低于稳定实时帧率。
@@ -686,7 +743,7 @@ Safety:
 | 坐标轴/单位误解 | 中/高 | 静止/直行/转弯实验；所有变换单元测试化 |
 | 没有四轮真实滑移角 | 高/中 | 使用 RaceRoom native schema 和轴级估算，重新训练 |
 | Reset 不稳定或过慢 | 高/高 | 状态机；长 episode 备选；不采用非公开绕过手段 |
-| vJoy 延迟/死区影响策略 | 中/高 | 每车标定、raw feedback、延迟测量和 action rate limit |
+| RaceRoom 不枚举 vJoy | 已发生/高 | M2 No-Go；保持控制关闭；联系 KW Studios；仅在 8.4 条件满足后恢复 |
 | 游戏与训练争抢 CPU/GPU | 中/中 | affinity、降低训练并发、记录帧率和 stale telemetry |
 | AC 重构回归 | 中/高 | adapter 包装、trace replay、旧入口 smoke test |
 | 赛道边界采集误差 | 中/高 | 三轨迹采集、可视化 QA、人工异常复核 |
@@ -698,7 +755,7 @@ Safety:
 在以下节点必须明确作出 go/no-go 决策：
 
 1. **M1 后：**世界坐标是否稳定、轴向是否可验证、共享内存实际更新率是否满足 25 Hz。
-2. **M2 后：**vJoy 是否由游戏正常支持，是否存在安全/许可警告，端到端控制延迟是否可接受。
+2. **M2 后：No-Go 已记录。** 当前 RaceRoom 不正常支持本机 vJoy 路径；闭环暂停，等待 8.4 解锁。
 3. **M4 后：**reset 是否满足训练吞吐；若不满足，是否接受长 episode 设计。
 4. **M5 后：**赛道资产误差是否足以支撑 gap/ray/out-of-track；若不满足，是否切换到视觉或弱地图 observation。
 5. **M6 后：**RaceRoom native schema 是否出现学习进展；若没有，先检查控制和 reward，不直接扩大训练预算。
@@ -716,16 +773,18 @@ Safety:
 7. 远端训练机/本地游戏机通信；保持游戏侧只使用官方 shared memory 和正常输入设备。
 8. RaceRoom API 更新自动兼容检查和 release fixture 更新流程。
 
-## 20. 第一批实际执行任务
+## 20. 下一批实际执行任务（2026-08-03 修订）
 
-开始实施时严格按以下顺序：
+按以下顺序继续：
 
-1. RR-001：保存 AC 基线 trace 和 smoke-test 命令。
-2. RR-002：冻结 pilot car/track/layout 与游戏/API 版本。
-3. RR-101：引入官方 RaceRoom packed ctypes 结构。
-4. RR-102：实现只读共享内存快照器。
-5. RR-103：运行 probe，生成字段和更新率报告。
-6. RR-104：完成坐标轴验证，决定二维平面映射。
-7. 通过 M1 决策门后才进入 vJoy 写入。
+1. RR-004：以 `docs/raceroom_vjoy_compatibility_20260803.md` 为附件依据，向
+   KW Studios 询问离线研究许可和当前版本支持的控制输入方案。
+2. 完成 M1 一小时只读 soak，冻结更新率、撕裂重试、timeout 和版本基线。
+3. 推进 M3 中不依赖 RaceRoom 写入的 Core、AC adapter、schema 和 trace replay 工作。
+4. 使用人工驾驶推进 M5 的上海 GP 参考线、边界和 occupancy 资产。
+5. 用户明确批准控制硬件/方案扩展后，按 8.4 重新打开 RR-003/RR-203；建立新的
+   设备识别、标定、延迟和安全报告。
+6. 只有控制决策门重新通过后，才恢复 M4 真实 reset、M6 闭环 Gym 和训练验证。
 
-这保证最先验证最大的不确定性：官方数据是否足以支持现有基于世界坐标、赛道边界和曲率前视的环境设计。
+当前优先级是保存已经通过的只读和 AC 能力，同时隔离失败的 RaceRoom 控制路径，
+避免把键盘 spike 或手工 `.rcs` 方案误报为闭环完成。

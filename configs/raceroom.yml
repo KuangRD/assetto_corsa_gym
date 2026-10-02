@@ -1,0 +1,79 @@
+simulator: raceroom
+
+Features:
+  raceroom_read_only: true
+  # Kept off: current RaceRoom 0.9.7.81 does not enumerate vJoy as a
+  # bindable input. See docs/raceroom_vjoy_compatibility_20260803.md.
+  raceroom_control: false
+  raceroom_reset: false
+
+Environment:
+  control_hz: 25
+  observation_schema: raceroom_native_v1
+  action_schema: normalized_controls_v1
+  max_episode_seconds: 600
+  telemetry_timeout_ms: 250
+
+RaceRoom:
+  shared_memory_name: "$R3E"
+  expected_api_major: 3
+  minimum_api_minor: 5
+  strict_api_minor: false
+  allowed_control_game_modes:
+    - track_test
+  vjoy_device_id: null
+  reset_button: null
+  control_backend: keyboard
+  keyboard_test_armed: false
+  keyboard_bindings:
+    throttle: up
+    brake: down
+    steer_left: left
+    steer_right: right
+    shift_up: q
+    shift_down: z
+
+  # RR-002 must freeze these from an installed, owned pilot combination.
+  game_version: "0.9.7.81"
+  game_executable: "Game/x64/RRRE64.exe"
+  game_executable_sha256: "c09db1a2647dff358c5f137d66a5be4480b77095d35df857f635b7162857a4f0"
+  pilot_car_name: "Audi RS 3 LMS TCR"
+  pilot_car_id: 11325
+  pilot_track_name: "Shanghai Circuit"
+  pilot_track_id: 2021
+  pilot_layout_name: "Grand Prix"
+  pilot_layout_id: 2027
+
+  # Frozen by RR-104 stationary/straight/left/right controlled experiments.
+  axis_mapping_validation_id: "rr35_shanghai2021_layout2027_car11325_20260802_v1"
+  world_horizontal_axes: [x, z]
+  world_vertical_axis: y
+  local_linear_axis_mapping:
+    # neutral forward/left/up = -R3E Z / +R3E X / +R3E Y
+    indices: [2, 0, 1]
+    signs: [-1, 1, 1]
+  local_angular_axis_mapping:
+    # pseudovector handedness correction; positive yaw means turning left
+    indices: [2, 0, 1]
+    signs: [1, -1, -1]
+  orientation_rpy_mapping:
+    indices: [2, 0, 1]
+    signs: [1, -1, -1]
+
+Track:
+  asset_root: data/raceroom
+  occupancy_resolution_m: 0.1
+
+Safety:
+  refuse_multiplayer: true
+  refuse_ranked: true
+  refuse_competition: true
+  stale_action: safe_brake
+  safe_brake_level: 0.5
+
+Logging:
+  include_game_mode: true
+  include_session_type: true
+  include_control_type: true
+  include_track_layout_car_ids: true
+  include_adapter_api_versions: true

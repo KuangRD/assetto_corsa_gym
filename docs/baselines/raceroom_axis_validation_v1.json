@@ -1,0 +1,94 @@
+{
+  "validation_id": "rr35_shanghai2021_layout2027_car11325_20260802_v1",
+  "purpose": "RR-104 first-pass RaceRoom coordinate and control-axis validation",
+  "api_version": "3.5",
+  "game_version": "0.9.7.81",
+  "pilot": {
+    "car_name": "Audi RS 3 LMS TCR",
+    "car_id": 11325,
+    "track_name": "Shanghai Circuit",
+    "track_id": 2021,
+    "layout_name": "Grand Prix",
+    "layout_id": 2027
+  },
+  "session_guard": {
+    "game_mode": 0,
+    "session_type": 0,
+    "session_phase": 5,
+    "control_type": 0
+  },
+  "trace": {
+    "duration_s": 20.0003556,
+    "rows": 7492,
+    "timeouts": 0,
+    "sequence_resets": 0,
+    "torn_read_retries": 74,
+    "straight_rows": 372,
+    "left_rows": 224,
+    "right_rows": 227
+  },
+  "controlled_motion": {
+    "maximum_speed_mps": {
+      "straight": 1.4747828245162964,
+      "left": 1.4269320964813232,
+      "right": 1.4698128700256348
+    },
+    "gear_during_motion": 1,
+    "upshift_confirmation": [1, 2],
+    "downshift_confirmation": [2, 1]
+  },
+  "evidence": {
+    "straight_speed_vs_local_velocity_z_correlation": -0.999950,
+    "left_mean_local_velocity_x_mps": 0.075334,
+    "right_mean_local_velocity_x_mps": -0.083300,
+    "left_mean_local_yaw_rate_r3e_radps": -0.046715,
+    "right_mean_local_yaw_rate_r3e_radps": 0.053736,
+    "world_position_range_m": {
+      "x": 1.901271,
+      "y": 0.008622,
+      "z": 0.894659
+    }
+  },
+  "mapping": {
+    "world_horizontal_axes": ["r3e_x", "r3e_z"],
+    "world_vertical_axis": "r3e_y",
+    "neutral_basis": ["forward", "left", "up"],
+    "local_linear": {
+      "indices": [2, 0, 1],
+      "signs": [-1, 1, 1],
+      "formula": ["-r3e_z", "+r3e_x", "+r3e_y"]
+    },
+    "local_angular": {
+      "indices": [2, 0, 1],
+      "signs": [1, -1, -1],
+      "formula": ["+r3e_z", "-r3e_x", "-r3e_y"]
+    },
+    "orientation_rpy": {
+      "indices": [2, 0, 1],
+      "signs": [1, -1, -1],
+      "formula": ["+r3e_roll", "-r3e_pitch", "-r3e_yaw"]
+    }
+  },
+  "artifacts": [
+    {
+      "path": "outputs/raceroom_m1/axis_validation/controlled_axes.parquet",
+      "bytes": 1388435,
+      "sha256": "bad8f35b1d013f57184b04713181a574c277b00d1667bfab62c1cd100e00a8e4"
+    },
+    {
+      "path": "outputs/raceroom_m1/axis_validation/controlled_axes.metadata.json",
+      "bytes": 720,
+      "sha256": "623781ab8686249284c2b090b5f4cf3b3969e4af7047aa6fd69d1e9728c7d84f"
+    },
+    {
+      "path": "outputs/raceroom_m2/keyboard_axis_control_test.json",
+      "bytes": 945,
+      "sha256": "9f0bf303ab7ef8ee0667b5d92152a8dc46e8913602d34806598a7423698435b6"
+    }
+  ],
+  "limitations": [
+    "Validated at low speed only; repeat sign and latency checks at moderate speed before training.",
+    "Absolute world-heading offset is not a cross-simulator alignment; only axis order and signs are frozen.",
+    "Keyboard is a development spike, not the final proportional control backend."
+  ]
+}
