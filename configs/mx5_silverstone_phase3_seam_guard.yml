@@ -1,0 +1,135 @@
+load_offline_data: false
+pre_train: false
+dataset_path: null
+work_dir: outputs/train_mx5cup_silverstone_phase3_seam_guard
+task: AssettoCorsaGym
+seed: 0
+
+disable_wandb: true
+wandb_entity: null
+wandb_project: sac
+wandb_silent: false
+exp_name: null
+task_title: null
+save_csv: true
+save_video: false
+save_agent: false
+action_dim: null
+steps: null
+
+Agent:
+  # Continue from the latest seam-guard checkpoint. Displayed checkpoint steps
+  # include the 1M offset below, so 7M continuation steps equals 8M total.
+  num_steps: 7_000_000
+  batch_size: 128
+  memory_size: 1_000_000
+  offline_buffer_size: 12_000_000
+  use_offline_buffer: false
+  update_interval: 4
+  start_steps: 250_000
+  random_steps: 0
+  warmup_deterministic: true
+  resume_reset_replay: true
+  replay_rebuild_steps: 25_000
+  replay_rebuild_deterministic: true
+  log_interval: 10
+  eval_interval: 25_000
+  num_eval_episodes: 3
+  checkpoint_freq: 25_000
+  checkpoint_step_offset: 1_000_000
+  stop_episode_at_eval_interval: true
+  evaluation_report_dir: outputs/train_mx5cup_silverstone_phase3_seam_guard/reports
+  save_final_buffer: false
+  save_checkpoint_file: true
+  checkpoint_replay_buffer: true
+  external_checkpoint_enabled: true
+  external_checkpoint_poll_interval_steps: 25
+  external_checkpoint_control_dir: outputs/train_mx5cup_silverstone_phase3_seam_guard/control
+  initial_entropy_alpha: 0.00622557
+  resume_policy_lr: 0.00002
+  resume_q_lr: 0.00002
+  resume_entropy_lr: 0.000005
+
+SAC:
+  gamma: 0.992
+  nstep: 3
+  policy_lr: 0.0001
+  q_lr: 0.0001
+  entropy_lr: 0.00003
+  policy_hidden_units: [256, 256, 256]
+  q_hidden_units: [256, 256, 256]
+  target_update_coef: 0.005
+  log_interval: 10
+
+DisCor:
+  error_lr: 0.0003
+  error_hidden_units: [256, 256, 256, 256]
+  tau_init: 10.0
+
+AssettoCorsa:
+  ego_sampling_freq: 25
+  max_episode_py_time: 600.0
+  gap_const: 12.0
+  eval_number_of_laps: 2
+  save_lap_csv: false
+  remote_machine_ip: localhost
+  ego_server_port: 2345
+  opponents_server_port: 2346
+  simulation_management_server_port: 2347
+  use_relative_actions: true
+  enable_sensors: true
+  vjoy_executed_by_server: false
+  enable_out_of_track_termination: true
+  enable_low_speed_termination: true
+  low_speed_termination_seconds: 20
+  recover_car_on_done: false
+  send_reset_at_start: true
+  record_controls_from_client: false
+  enable_out_of_track_penalty: false
+  max_laps_number: null
+  enable_task_id_in_obs: false
+  penalize_actions_diff: false
+  penalize_actions_diff_coef: 0.1
+  max_steer_rate: 900.0
+
+  enable_steering_smoothness_reward: true
+  steer_command_penalty_coef: 0.005
+  steer_reversal_penalty_coef: 0.16
+  steer_rate_penalty_coef: 0.03
+  steer_jerk_penalty_coef: 0.08
+  steer_smooth_min_speed: 30.0
+  steer_smooth_full_speed: 40.0
+  steer_smooth_curvature_threshold: 0.0015
+  steer_smooth_curvature_lookahead: 75.0
+  steer_smooth_curvature_samples: 4
+  steer_smooth_max_gap: 3.0
+  steer_smooth_ramp_start_step: 3_400_000
+  steer_smooth_ramp_steps: 100_000
+
+  enable_dynamic_steer_rate_limit: true
+  straight_max_steer_rate: 600.0
+  dynamic_steer_rate_ramp_start_step: 3_400_000
+  dynamic_steer_rate_ramp_steps: 100_000
+
+  # Periodic seam protection. Weight is one within 35m of either side of the
+  # line and fades continuously to zero at 100m. Reward uses unguarded policy
+  # actions, with extra reversal/jerk cost in the same periodic zone.
+  enable_seam_steering_guard: true
+  seam_guard_full_distance: 35.0
+  seam_guard_fade_distance: 100.0
+  seam_guard_max_command: 0.15
+  seam_guard_reversal_damping: 0.25
+  seam_reversal_penalty_multiplier: 4.0
+  seam_jerk_penalty_multiplier: 4.0
+
+  track: ks_silverstone-gp
+  car: ks_mazda_mx5_cup
+  use_ac_out_of_track: true
+  add_previous_obs_to_state: true
+  use_reference_line_in_reward: true
+  use_target_speed: false
+  screen_capture_enable: false
+  final_image_width: 320
+  final_image_height: 240
+  color_mode: gray
+  use_obs_extra: false

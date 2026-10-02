@@ -1,0 +1,207 @@
+load_offline_data: false
+pre_train: false
+dataset_path: null
+work_dir: outputs/train_mx5cup_silverstone_phase6d_t15_guard_pilot_to_4m78
+task: AssettoCorsaGym
+seed: 0
+
+disable_wandb: true
+wandb_entity: null
+wandb_project: sac
+wandb_silent: false
+exp_name: null
+task_title: null
+save_csv: true
+save_video: false
+save_agent: false
+action_dim: null
+steps: null
+
+Agent:
+  # Resume the unchanged 4.775M policy with its rebuilt replay, then perform
+  # only a 5k-step low-LR update pilot before mandatory evaluation.
+  num_steps: 3_780_000
+  batch_size: 128
+  memory_size: 1_000_000
+  offline_buffer_size: 12_000_000
+  use_offline_buffer: false
+  update_interval: 4
+  start_steps: 250_000
+  random_steps: 0
+  warmup_deterministic: true
+  resume_reset_replay: false
+  # Do not restore legacy pre-physical-timer lap rows into this experiment's
+  # summary.csv.  Those rows contain the old ~310 s two-lap merge artifacts.
+  resume_reset_episode_stats: true
+  replay_rebuild_steps: 0
+  replay_rebuild_deterministic: true
+  # Fine-tuning exploration repeatedly crashed at 88-116 m and poisoned the
+  # replay.  Collect this conservative pilot with the deterministic mean.
+  online_collection_deterministic: true
+  log_interval: 10
+  eval_interval: 5_000
+  num_eval_episodes: 1
+  checkpoint_freq: 5_000
+  checkpoint_step_offset: 1_000_000
+  stop_episode_at_eval_interval: true
+  evaluation_report_dir: outputs/train_mx5cup_silverstone_phase6d_t15_guard_pilot_to_4m78/reports
+  save_final_buffer: false
+  save_checkpoint_file: true
+  checkpoint_replay_buffer: true
+  external_checkpoint_enabled: true
+  external_checkpoint_poll_interval_steps: 25
+  external_checkpoint_control_dir: outputs/train_mx5cup_silverstone_phase6d_t15_guard_pilot_to_4m78/control
+  initial_entropy_alpha: 0.00622557
+  # The previous 5e-6 pilot degraded within 25k updates.  Use one fifth of
+  # that rate and stop after 5k updates for an early safety decision.
+  resume_policy_lr: 0.000001
+  resume_q_lr: 0.000001
+  resume_entropy_lr: 0.0000002
+
+SAC:
+  gamma: 0.992
+  nstep: 3
+  policy_lr: 0.0001
+  q_lr: 0.0001
+  entropy_lr: 0.00003
+  policy_hidden_units: [256, 256, 256]
+  q_hidden_units: [256, 256, 256]
+  target_update_coef: 0.005
+  log_interval: 10
+
+DisCor:
+  error_lr: 0.0003
+  error_hidden_units: [256, 256, 256, 256]
+  tau_init: 10.0
+
+AssettoCorsa:
+  ego_sampling_freq: 25
+  # A reset can begin part-way around the track, so allow one outlap plus one
+  # complete timed lap without turning every 25k-step check into a long pause.
+  max_episode_py_time: 450.0
+  gap_const: 12.0
+  eval_number_of_laps: 1
+  save_lap_csv: false
+  remote_machine_ip: localhost
+  ego_server_port: 2345
+  opponents_server_port: 2346
+  simulation_management_server_port: 2347
+  use_relative_actions: true
+  enable_sensors: true
+  vjoy_executed_by_server: false
+  enable_out_of_track_termination: true
+  enable_low_speed_termination: true
+  low_speed_termination_seconds: 20
+  # Stop before a stuck physical H-shifter can invalidate an evaluation or
+  # feed a low-speed sixth-gear transition into replay.  AC reports neutral
+  # as 1, so gear value 7 is sixth for this car.
+  enable_start_gear_preflight: true
+  start_gear_preflight_invalid_gear: 7
+  start_gear_preflight_max_speed: 30.0
+  start_gear_preflight_seconds: 10.0
+  recover_car_on_done: false
+  send_reset_at_start: true
+  record_controls_from_client: false
+  enable_out_of_track_penalty: false
+  max_laps_number: null
+  enable_task_id_in_obs: false
+  penalize_actions_diff: false
+  penalize_actions_diff_coef: 0.1
+  max_steer_rate: 900.0
+
+  # Continue the same straight-gated objective that produced the 4.75M model.
+  # The failed curvature-independent Phase 5 chatter term remains disabled.
+  enable_steering_smoothness_reward: true
+  steer_command_penalty_coef: 0.005
+  steer_reversal_penalty_coef: 0.16
+  steer_rate_penalty_coef: 0.03
+  steer_jerk_penalty_coef: 0.08
+  steer_global_reversal_penalty_coef: 0.0
+  steer_global_jerk_penalty_coef: 0.0
+  steer_global_chatter_penalty_coef: 0.0
+  steer_smooth_min_speed: 30.0
+  steer_smooth_full_speed: 40.0
+  steer_smooth_curvature_threshold: 0.0015
+  steer_smooth_curvature_lookahead: 75.0
+  steer_smooth_curvature_samples: 4
+  steer_smooth_max_gap: 3.0
+  steer_smooth_ramp_start_step: 3_400_000
+  steer_smooth_ramp_steps: 100_000
+
+  enable_dynamic_steer_rate_limit: true
+  straight_max_steer_rate: 600.0
+  dynamic_steer_rate_ramp_start_step: 3_400_000
+  dynamic_steer_rate_ramp_steps: 100_000
+
+  enable_global_steering_reversal_guard: true
+  global_steer_reversal_damping: 0.75
+  global_steer_reversal_min_magnitude: 0.75
+
+  enable_steering_command_filter: true
+  steering_command_filter_alpha: 0.80
+
+  enable_seam_steering_guard: true
+  seam_guard_full_distance: 80.0
+  seam_guard_fade_distance: 180.0
+  seam_guard_max_command: 0.15
+  seam_guard_reversal_damping: 0.25
+  # Preserve the anti-wobble clamp only near the racing line.  Recovery takes
+  # precedence as the gap grows, and any tyre-out state releases it fully.
+  seam_guard_full_gap: 1.5
+  seam_guard_release_gap: 2.5
+  seam_guard_disable_with_tyres_out: true
+  # One tyre on a normal exit curb is not an emergency.  Release only once
+  # two tyres are out, which matches the recorded post-line collision.
+  seam_guard_release_min_tyres_out: 2
+  # Once recovery is required, keep it latched until the car has remained
+  # close to the racing line with all tyres in for half a second.
+  seam_recovery_enter_gap: 1.5
+  seam_recovery_exit_gap: 1.0
+  seam_recovery_exit_hold_seconds: 0.5
+  # Relative actions can accumulate even when each command is clamped.  Bound
+  # the resulting absolute steering near the start/finish seam instead.
+  enable_seam_absolute_steer_guard: true
+  # Release both the controller and absolute envelope over 180-220 m.  The
+  # absolute limit now opens all the way to 1.0 during that fade, avoiding the
+  # old 0.12 -> unrestricted one-frame jump while leaving the 250 m corner
+  # completely untouched.
+  seam_absolute_guard_full_distance: 180.0
+  seam_absolute_guard_fade_distance: 220.0
+  seam_absolute_steer_full_limit: 0.10
+  seam_absolute_steer_fade_limit: 1.0
+  seam_absolute_steer_recovery_limit: 0.12
+  # Keep the car on line before an error grows: use an absolute PD target
+  # throughout 0-180 m, then blend back to the policy by 220 m.
+  enable_seam_lane_keep_controller: true
+  seam_lane_keep_full_distance: 180.0
+  seam_lane_keep_fade_distance: 220.0
+  seam_recovery_steer_kp: 0.03
+  # Recorded 0-180 m failures are an under-damped lateral oscillation.  Add
+  # Keep the validated, calmer controller gains.  If lateral error latches
+  # during the normal 180-220 m handoff, retain recovery authority with a
+  # smooth envelope to 300 m; release early after gap < 1 m for 0.5 s.
+  seam_recovery_steer_kd: 0.015
+  seam_recovery_steer_rate: 200.0
+  seam_emergency_recovery_fade_distance: 300.0
+  # T15 exit to T16 braking: telemetry shows 9-17 strong reversals per 100 m
+  # despite staying within 0.7 m of the reference line.  This zone tightens
+  # only the relative command/rate guard and reward gate; it deliberately does
+  # not use the start-line absolute lane controller because gap sign is local
+  # to the racing-line segment.  Release fully 20 m before recorded braking.
+  # Values: fade-in start/full start/full end/fade-out end in lap metres.
+  targeted_straight_guard_zones:
+    - [5040.0, 5080.0, 5180.0, 5200.0]
+  seam_reversal_penalty_multiplier: 4.0
+  seam_jerk_penalty_multiplier: 4.0
+
+  track: ks_silverstone-gp
+  car: ks_mazda_mx5_cup
+  use_ac_out_of_track: true
+  add_previous_obs_to_state: true
+  use_reference_line_in_reward: true
+  use_target_speed: false
+  screen_capture_enable: false
+  final_image_width: 320
+  final_image_height: 240
+  color_mode: gray
+  use_obs_extra: false
