@@ -10,13 +10,13 @@ Assetto Corsa Gym integrates the Assetto Corsa racing simulator with OpenAI Gym 
 
 ### Environment Setup
 ```bash
-conda create -n p309 python=3.9.13
+conda env create -f environment.yml
 conda activate p309
-pip install setuptools==65.5.0 "cython<3" "wheel<0.40.0"
-python -m pip install pip==24.0
-pip install -r requirements.txt
-conda install pytorch==1.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
+pip install -r requirements-dev.txt
 ```
+
+`environment.yml` owns Python, PyTorch, and CUDA Toolkit versions;
+`requirements.txt` is the runtime lock, and `requirements-dev.txt` adds pytest.
 
 ### Download Track Data
 ```bash

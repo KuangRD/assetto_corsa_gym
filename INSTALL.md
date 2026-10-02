@@ -171,12 +171,13 @@ C:\Python33\python get-pip.py
   🔗 [Download pywin32-221](https://sourceforge.net/projects/pywin32/files/pywin32/Build%20221/pywin32-221.win-amd64-py3.3.exe/download)  
 
 
-#### **Step 4: Install Additional Dependencies in Your Current Environment (Python 3.9+)**  
-- Install the required dependencies in your **current Python 3.9+ environment**:  
+#### **Step 4: Verify Dependencies in Your Current Environment (Python 3.9+)**
+- The screen-capture dependencies are installed through the repository's
+  `requirements.txt`. Create the complete environment from the repository root:
 
 ```sh
+conda env create -f environment.yml
 conda activate p309
-pip install mss pygetwindow opencv-python
 ```  
 
 - If your `p309` interpreter is **not in the default path**, set it manually in `<sensor_par>/config.py`:
@@ -233,4 +234,3 @@ vjoy_executed_by_server: true
   ```sh
   C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\sensor_par_subprocess_log.txt
   ```
-

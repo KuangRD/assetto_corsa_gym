@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Test runner used by tests/unit.
+pytest==7.4.4

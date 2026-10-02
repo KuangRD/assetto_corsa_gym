@@ -112,14 +112,16 @@ We base our SAC code on [this](https://github.com/toshikwa/discor.pytorch) imple
       - Make sure to install the C++ build tools component
 
     - **Install Python using Anaconda**
-      ```
-      conda create -n p309 python=3.9.13
+      ```sh
+      conda env create -f environment.yml
       conda activate p309
-      pip install setuptools==65.5.0 "cython<3"
-      pip install "wheel<0.40.0"
-      python -m pip install pip==24.0
-      pip install -r requirements.txt
-      conda install pytorch==1.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
+      ```
+      `environment.yml` pins Python 3.9, PyTorch 1.12.1, CUDA Toolkit 11.6,
+      and installs the reproducible runtime set from `requirements.txt`.
+      Contributors running the unit tests should additionally install:
+      ```sh
+      pip install -r requirements-dev.txt
+      python -m pytest -q
       ```
 
 2. **Download the tracks occupancy grid**
@@ -199,8 +201,9 @@ Experiments and parameters are configured via `config.yml` and executed with `py
 #### How to Use:  
 1. Complete the required installation steps and dependencies (see [`INSTALL.md`](INSTALL.md)).  
 
-2. Install additional dependencies in your **current environment (Python 3.9+)**:
-`pip install pygetwindow opencv-python`
+2. Screen-capture dependencies (`mss`, `opencv-python`, and `pywin32`) are
+   installed by `requirements.txt`. OpenCV is pinned to a NumPy 1.23-compatible
+   release; do not upgrade it independently without checking NumPy compatibility.
 3. Set the resolution in Assetto Corsa to **640x480**.  
 4. In `<AC_installation_folder>/apps/python/sensor_par/config.py`, set `screen_capture_enable = True`.  
    - *(See other available options in this file.)*  
