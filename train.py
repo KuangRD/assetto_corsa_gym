@@ -27,6 +27,12 @@ def parse_args(hardcode=None):
     parser.add_argument("--config", default="config.yml", type=str, help="Path to configuration file")
     parser.add_argument("--load_path", type=str, default=None, help="Path to load the model from (default: None)")
     parser.add_argument(
+        "--resume_ckpt",
+        type=str,
+        default=None,
+        help="Path to a complete training_state.ckpt to resume exactly",
+    )
+    parser.add_argument(
         "--weights_only",
         action="store_true",
         help="Load model weights as initialization without loading a replay buffer or resuming the step counter",
@@ -38,7 +44,12 @@ def parse_args(hardcode=None):
         args = parser.parse_args(hardcode.split())
     else:
         args = parser.parse_args()
+    if args.load_path is not None and args.resume_ckpt is not None:
+        parser.error("--load_path and --resume_ckpt are mutually exclusive")
+    if args.weights_only and args.load_path is None:
+        parser.error("--weights_only requires --load_path")
     args.load_path = os.path.abspath(args.load_path) + os.sep if args.load_path is not None else None
+    args.resume_ckpt = os.path.abspath(args.resume_ckpt) if args.resume_ckpt is not None else None
     return args
 
 def main():
@@ -134,7 +145,9 @@ def main():
     if config.pre_train:
         agent.pre_train()
 
-    if args.load_path is not None:
+    if args.resume_ckpt is not None:
+        agent.load_training_checkpoint(args.resume_ckpt)
+    elif args.load_path is not None:
         load_buffer = not (args.test or args.weights_only)
         agent.load(args.load_path, load_buffer=load_buffer)
 

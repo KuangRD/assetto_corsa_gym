@@ -1,4 +1,5 @@
 from collections import deque
+from pathlib import Path
 import numpy as np
 import torch
 
@@ -67,6 +68,7 @@ class ReplayBuffer:
     def _reset(self):
         self._n = 0
         self._p = 0
+        self._total_appends = 0
 
         self._states = np.empty(
             (self._memory_size, ) + self._state_shape, dtype=np.float32)
@@ -110,6 +112,74 @@ class ReplayBuffer:
 
         self._n = min(self._n + 1, self._memory_size)
         self._p = (self._p + 1) % self._memory_size
+        self._total_appends += 1
+
+    def save_delta(self, path, since_total_appends=0):
+        """Persist only replay slots changed since the previous checkpoint."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Buffers pickled by older versions do not have this counter.  Their
+        # current contents are still a valid full starting snapshot.
+        total_appends = getattr(self, "_total_appends", self._n)
+        changed = total_appends - int(since_total_appends)
+        full_snapshot = changed < 0 or changed >= self._memory_size
+
+        if full_snapshot:
+            indices = np.arange(self._n if self._n < self._memory_size else self._memory_size)
+        elif changed == 0:
+            indices = np.empty(0, dtype=np.int64)
+        else:
+            changed = min(changed, self._n)
+            start = (self._p - changed) % self._memory_size
+            if start < self._p:
+                indices = np.arange(start, self._p)
+            else:
+                indices = np.concatenate((
+                    np.arange(start, self._memory_size),
+                    np.arange(0, self._p),
+                ))
+
+        np.savez(
+            path,
+            indices=indices,
+            states=self._states[indices],
+            next_states=self._next_states[indices],
+            actions=self._actions[indices],
+            rewards=self._rewards[indices],
+            dones=self._dones[indices],
+            n=np.asarray(self._n, dtype=np.int64),
+            p=np.asarray(self._p, dtype=np.int64),
+            total_appends=np.asarray(total_appends, dtype=np.int64),
+            memory_size=np.asarray(self._memory_size, dtype=np.int64),
+        )
+        return {
+            "changed_slots": int(len(indices)),
+            "total_appends": int(total_appends),
+            "full_snapshot": bool(full_snapshot),
+        }
+
+    def load_delta(self, path):
+        """Apply one replay delta produced by :meth:`save_delta`."""
+        with np.load(path, allow_pickle=False) as delta:
+            memory_size = int(delta["memory_size"])
+            if memory_size != self._memory_size:
+                raise ValueError(
+                    f"Replay memory size mismatch: checkpoint={memory_size}, "
+                    f"configured={self._memory_size}")
+
+            indices = delta["indices"].astype(np.int64, copy=False)
+            self._states[indices] = delta["states"]
+            self._next_states[indices] = delta["next_states"]
+            self._actions[indices] = delta["actions"]
+            self._rewards[indices] = delta["rewards"]
+            self._dones[indices] = delta["dones"]
+            self._n = int(delta["n"])
+            self._p = int(delta["p"])
+            self._total_appends = int(delta["total_appends"])
+
+        if self._nstep != 1:
+            self._nstep_buffer.reset()
 
     def sample(self, batch_size, device=torch.device('cpu')):
         assert isinstance(batch_size, int) and batch_size > 0
