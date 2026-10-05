@@ -1,0 +1,98 @@
+[
+  {
+    "run": "baseline",
+    "valid": 6,
+    "attempts": 3,
+    "completed": 3,
+    "best": 150.7315358940541,
+    "median": 150.78431471870863
+  },
+  {
+    "run": "baseline_timing",
+    "valid": 6,
+    "attempts": 3,
+    "completed": 3,
+    "best": 150.736818838428,
+    "median": 150.74466133474925
+  },
+  {
+    "run": "fastest_line_screen",
+    "valid": 0,
+    "attempts": 3,
+    "completed": 0,
+    "best": null,
+    "median": null
+  },
+  {
+    "run": "eval2500_original",
+    "valid": 6,
+    "attempts": 3,
+    "completed": 3,
+    "best": 150.66831249411916,
+    "median": 150.7694532935202
+  },
+  {
+    "run": "eval2500_fastest",
+    "valid": 0,
+    "attempts": 3,
+    "completed": 0,
+    "best": null,
+    "median": null
+  },
+  {
+    "run": "diagnostic_original_curvature",
+    "valid": 0,
+    "attempts": 3,
+    "completed": 0,
+    "best": null,
+    "median": null
+  },
+  {
+    "run": "screen_curriculum10",
+    "valid": 6,
+    "attempts": 3,
+    "completed": 3,
+    "best": 150.591190259438,
+    "median": 150.65279251008178
+  },
+  {
+    "run": "eval2500_curriculum10",
+    "valid": 4,
+    "attempts": 3,
+    "completed": 2,
+    "best": 150.62330809549894,
+    "median": 150.67460409915657
+  },
+  {
+    "run": "baseline_recheck_final",
+    "valid": 6,
+    "attempts": 3,
+    "completed": 3,
+    "best": 150.7189838741324,
+    "median": 150.7823676220869
+  },
+  {
+    "run": "curriculum10_fixed_recheck",
+    "valid": 6,
+    "attempts": 3,
+    "completed": 3,
+    "best": 150.58580363501096,
+    "median": 150.6405894702766
+  },
+  {
+    "run": "verify_curriculum10_5x2",
+    "valid": 10,
+    "attempts": 5,
+    "completed": 5,
+    "best": 150.5772173301375,
+    "median": 150.61508993967436
+  },
+  {
+    "run": "endurance_curriculum10_8",
+    "valid": 8,
+    "attempts": 1,
+    "completed": 1,
+    "best": 150.572890105861,
+    "median": 150.64439396798844
+  }
+]

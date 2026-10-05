@@ -1,0 +1,11 @@
+{
+  "status": "validated_5x2_and_8lap_endurance",
+  "checkpoint": "outputs/train_mx5cup_silverstone_phase2_smooth/model/checkpoints/step_04750000/training_state.ckpt",
+  "reference": "docs/experiments/fastest_line_20261004/reference_lines/fastest_curriculum10.csv",
+  "reference_sha256": "5e74fb4af557c1a0ed97c27bb88cf4828701d8749cc07a86ca8a932cb89359fb",
+  "verification_config": "outputs/fastest_line_study_20261004/configs/verify_curriculum10_5x2.yml",
+  "verification_config_sha256": "57bfba2a41fb8a1601e9775f0f199d7ee6699ad104aa4a524c6080a603a5e130",
+  "note": "Checkpoint and original verification config remain local and are not included in Git; original config hash is retained for provenance.",
+  "best_valid_s": 150.572890105861,
+  "endurance_median_s": 150.64439396798844
+}

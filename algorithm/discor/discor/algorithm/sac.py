@@ -1,4 +1,6 @@
 import os
+import copy
+import math
 import torch
 from torch.optim import Adam
 
@@ -16,7 +18,9 @@ class SAC(Algorithm):
     def __init__(self, state_dim, action_dim, device, gamma=0.99, nstep=1,
                  policy_lr=0.0003, q_lr=0.0003, entropy_lr=0.0003,
                  policy_hidden_units=[256, 256], q_hidden_units=[256, 256],
-                 target_update_coef=0.005, log_interval=10, seed=0):
+                 target_update_coef=0.005, log_interval=10, seed=0,
+                 policy_anchor_path=None, policy_anchor_coef=0.0,
+                 policy_freeze_until_learning_step=0):
         super().__init__(
             state_dim, action_dim, device, gamma, nstep, log_interval, seed)
 
@@ -42,6 +46,24 @@ class SAC(Algorithm):
 
         # Disable gradient calculations of the target network.
         disable_gradients(self._target_q_net)
+
+        self._policy_anchor_coef = float(policy_anchor_coef)
+        if not math.isfinite(self._policy_anchor_coef) or self._policy_anchor_coef < 0:
+            raise ValueError("policy_anchor_coef must be finite and nonnegative")
+        self._policy_anchor = None
+        self._policy_freeze_until_learning_step = int(policy_freeze_until_learning_step)
+        if self._policy_freeze_until_learning_step < 0:
+            raise ValueError("policy freeze step must be nonnegative")
+        if self._policy_anchor_coef:
+            if not policy_anchor_path:
+                raise ValueError("policy_anchor_path required when anchor is enabled")
+            # Copy without consuming RNG; immutable teacher stays outside optimizers.
+            self._policy_anchor = copy.deepcopy(self._policy_net).eval()
+            self._policy_anchor.load_state_dict(torch.load(
+                policy_anchor_path, map_location=self._device))
+            disable_gradients(self._policy_anchor)
+            logger.info("Policy anchor enabled: coefficient=%g source=%s",
+                        self._policy_anchor_coef, policy_anchor_path)
 
         # Optimizers.
         self._policy_optim = Adam(self._policy_net.parameters(), lr=policy_lr)
@@ -83,7 +105,10 @@ class SAC(Algorithm):
 
     def update_online_networks(self, batch, writer):
         self._learning_steps += 1
-        stats = self.update_policy_and_entropy(batch, writer)
+        if self._learning_steps <= self._policy_freeze_until_learning_step:
+            stats = None
+        else:
+            stats = self.update_policy_and_entropy(batch, writer)
         self.update_q_functions(batch, writer)
         return stats
 
@@ -131,8 +156,19 @@ class SAC(Algorithm):
         # Policy objective is maximization of (Q + alpha * entropy).
         assert qs.shape == entropies.shape
         policy_loss = torch.mean((- qs - self._alpha * entropies))
+        if self._policy_anchor is not None:
+            policy_loss = policy_loss + self._policy_anchor_coef * self.calc_anchor_loss(states)
 
         return policy_loss, entropies.detach_()
+
+    def calc_anchor_loss(self, states):
+        """Keep deterministic actions and exploration scale near a frozen policy."""
+        current_mean, current_log_std = torch.chunk(self._policy_net.net(states), 2, dim=-1)
+        with torch.no_grad():
+            anchor_mean, anchor_log_std = torch.chunk(self._policy_anchor.net(states), 2, dim=-1)
+        mean_loss = (torch.tanh(current_mean) - torch.tanh(anchor_mean)).pow(2).mean()
+        std_loss = (current_log_std.clamp(-20, 2) - anchor_log_std.clamp(-20, 2)).pow(2).mean()
+        return mean_loss + 0.1 * std_loss
 
     def calc_entropy_loss(self, entropies):
         assert not entropies.requires_grad

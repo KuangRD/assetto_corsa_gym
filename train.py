@@ -85,8 +85,15 @@ def main():
     env = assettoCorsa.make_ac_env(cfg=config, work_dir=work_dir)
 
     # Device to use
-    device = torch.device("cuda")
-    assert device.type == "cuda", "Only cuda is supported"
+    device = torch.device(config.get("training_device", "cuda"))
+    if device.type not in ("cpu", "cuda"):
+        raise ValueError("training_device must be cpu or cuda")
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    torch_threads = config.get("torch_num_threads", None)
+    if torch_threads is not None:
+        torch.set_num_threads(int(torch_threads))
+    logger.info("Training device: %s; torch threads: %s", device, torch.get_num_threads())
 
     if args.algo == 'discor':
         algo = DisCor(

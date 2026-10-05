@@ -39,6 +39,8 @@ from AssettoCorsaEnv.sensors_ray_casting import MAX_RAY_LEN
 from AssettoCorsaEnv.gap import get_gap
 from AssettoCorsaEnv.lap_timing import physical_lap_times
 from AssettoCorsaEnv.control_state import has_low_speed_high_gear_conflict
+from AssettoCorsaEnv.pedal_conditioning import reduce_light_brake_overlap
+from AssettoCorsaEnv.reference_reward import reference_line_multiplier
 
 import torch
 
@@ -824,7 +826,12 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
             self._seam_absolute_guard_active = float(
                 not np.isclose(limited_steer, new_actions[0]))
             new_actions[0] = limited_steer
-        return np.clip(new_actions, self.controls_min_values, self.controls_max_values)
+        new_actions = np.clip(new_actions, self.controls_min_values, self.controls_max_values)
+        overlap_reduction = float(self.config.get("pedal_overlap_reduction", 0.0))
+        if overlap_reduction:
+            new_actions[2] = reduce_light_brake_overlap(
+                new_actions[1], new_actions[2], overlap_reduction)
+        return new_actions
 
     def _condition_policy_actions(self, actions):
         """Apply steering guards and optional low-pass rate filtering."""
@@ -994,6 +1001,8 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         """
         # Keep the original policy output for learning. The guarded command is
         # logged as actions_0 and is the command actually applied to the car.
+        self._command_started_at = time.perf_counter()
+        self._command_observation_age_s = max(0.0, self._command_started_at - getattr(self, "_last_observation_received_at", self._command_started_at))
         self.policy_actions = np.asarray(actions, dtype=float).copy()
         self.raw_actions = self._condition_policy_actions(actions)
 
@@ -1016,6 +1025,7 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
 
         self.client.controls.set_controls(steer=self.actions[0], acc=self.actions[1], brake=self.actions[2])
         self.client.respond_to_server()
+        self._command_sent_at = time.perf_counter()
 
     def set_training_progress(self, total_steps, current_step, elapsed_seconds):
         """Attach training progress to the next control packet sent to AC."""
@@ -1044,6 +1054,11 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
 
         state = self.client.step_sim()
         state["timestamp_env"] = time.perf_counter()
+        self._last_observation_received_at = state["timestamp_env"]
+        state["command_started_at"] = getattr(self, "_command_started_at", float("nan"))
+        state["command_sent_at"] = getattr(self, "_command_sent_at", float("nan"))
+        state["command_observation_age_s"] = getattr(self, "_command_observation_age_s", float("nan"))
+
 
         self.state, buf_infos = self.expand_state(state)
 
@@ -1257,7 +1272,10 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
 
         r = speed
         if self.use_reference_line_in_reward:
-            r *= ( 1.0 - (np.abs( state["gap"]) / 12.00))
+            r *= reference_line_multiplier(
+                state["gap"],
+                scale=float(self.config.get("reference_line_penalty_scale", 12.0)),
+                corridor=float(self.config.get("reference_line_corridor_m", 0.0)))
         r /= 300. # normalize
 
         if self.penalize_actions_diff:
@@ -1680,6 +1698,9 @@ class AssettoCorsaEnv(Env, gym_utils.EzPickle):
         self.track_length = self.track_config["TrackLength"]
         self.track_file = os.path.join(self.tracks_path, self.track_config["track_file"])
         self.ref_lap_file = os.path.join(self.tracks_path, self.track_config["ref_lap_file"])
+        reference_override = self.config.get("reference_lap_override")
+        if reference_override:
+            self.ref_lap_file = str(Path(reference_override).resolve(strict=True))
         self.track_grid_file = os.path.join(self.tracks_path, self.track_config["track_grid_file"])
 
     def set_eval_mode(self):
