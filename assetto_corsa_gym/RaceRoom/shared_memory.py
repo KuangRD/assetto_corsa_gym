@@ -147,7 +147,7 @@ class RaceRoomSharedMemory:
         name: str = SHARED_MEMORY_NAME,
         expected_major: int = API_VERSION_MAJOR,
         minimum_minor: int = API_VERSION_MINOR,
-        strict_minor: bool = False,
+        strict_minor: bool = True,
         max_snapshot_attempts: int = 8,
         poll_interval_s: float = 0.001,
         source: Optional[SnapshotSource] = None,

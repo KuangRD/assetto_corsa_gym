@@ -97,6 +97,25 @@ def run_probe(duration_s: float, timeout_s: float) -> Dict[str, Any]:
                 "minor": int(data.version_minor),
                 "all_drivers_offset": int(data.all_drivers_offset),
                 "driver_data_size": int(data.driver_data_size),
+            "start_procedure": {
+                "start_mode": int(data.start_mode),
+                "start_group_count": int(data.start_group_count),
+                "formation_speed_limit_mps": finite_or_none(
+                    data.formation_speed_limit
+                ),
+                "formation_pace_floor_mps": finite_or_none(
+                    data.formation_pace_floor
+                ),
+                "start_corridor_lap_distance_m": finite_or_none(
+                    data.start_corridor_lap_distance
+                ),
+                "formation_side": int(data.formation_side),
+                "formation_follow_slot_id": int(data.formation_follow_slot_id),
+                "pitlane_start_delay_remaining_s": finite_or_none(
+                    data.pitlane_start_delay_remaining
+                ),
+                "start_penalty_pending": int(data.start_penalty_pending),
+            },
             },
             "session": {
                 "game_mode": int(data.game_mode),
@@ -144,8 +163,8 @@ def run_probe(duration_s: float, timeout_s: float) -> Dict[str, Any]:
             },
             "availability": dict(frame.availability),
             "next_action": (
-                "Run RR-104 stationary/straight/left/right experiments; do not "
-                "enable vJoy until axis_mapping_validation_id is frozen."
+                "Keep telemetry read-only until RaceRoom recognizes a supported "
+                "input device and the session guard allows the active session."
             ),
         }
     finally:

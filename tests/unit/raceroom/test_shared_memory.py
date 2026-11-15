@@ -6,7 +6,7 @@ from assetto_corsa_gym.RaceRoom.structures import R3EDriverData, R3EShared
 from assetto_corsa_gym.RacingEnv.errors import SharedMemoryVersionError
 
 
-def make_payload(sequence, major=3, minor=5):
+def make_payload(sequence, major=3, minor=6):
     data = R3EShared()
     data.version_major = major
     data.version_minor = minor
@@ -92,6 +92,34 @@ class SharedMemoryReaderTests(unittest.TestCase):
             reader.open()
         self.assertFalse(reader.connected)
         self.assertFalse(source.opened)
+
+    def test_api_36_is_accepted_and_start_fields_are_read(self):
+        data = R3EShared()
+        data.version_major = 3
+        data.version_minor = 6
+        data.all_drivers_offset = R3EShared.num_cars.offset
+        data.driver_data_size = ctypes.sizeof(R3EDriverData)
+        data.player.game_simulation_ticks = 1
+        data.formation_speed_limit = 52.5
+        source = ScriptedSource([1, 1], bytes(data))
+        reader = RaceRoomSharedMemory(source=source)
+        snapshot = reader.open()
+        self.assertEqual(snapshot.data.version_minor, 6)
+        self.assertAlmostEqual(snapshot.data.formation_speed_limit, 52.5)
+
+    def test_api_35_is_rejected(self):
+        source = ScriptedSource([1, 1], make_payload(1, minor=5))
+        reader = RaceRoomSharedMemory(source=source)
+        with self.assertRaises(SharedMemoryVersionError):
+            reader.open()
+        self.assertFalse(reader.connected)
+        self.assertFalse(source.opened)
+
+    def test_unknown_minor_is_rejected_by_default(self):
+        source = ScriptedSource([1, 1], make_payload(1, minor=7))
+        reader = RaceRoomSharedMemory(source=source)
+        with self.assertRaises(SharedMemoryVersionError):
+            reader.open()
 
 
 if __name__ == "__main__":

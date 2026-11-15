@@ -1,11 +1,11 @@
-"""Constants from the official RaceRoom shared-memory API 3.5."""
+"""Constants from the official RaceRoom shared-memory API 3.6."""
 
 from enum import IntEnum
 
 
 SHARED_MEMORY_NAME = "$R3E"
 API_VERSION_MAJOR = 3
-API_VERSION_MINOR = 5
+API_VERSION_MINOR = 6
 MAX_DRIVERS = 128
 TIRE_COUNT = 4
 PIT_MENU_ITEM_COUNT = 12

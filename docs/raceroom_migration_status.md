@@ -11,9 +11,9 @@
 | RR-001 | 已完成 | 冻结同日 MX-5 Cup / Silverstone GP 基线：12,076 steps、连续 3 圈、0 丢包，见 `docs/baselines/ac_m0_baseline.json` |
 | RR-002 | 已完成 | 冻结 RaceRoom `0.9.7.81`、Audi RS 3 LMS TCR (`11325`)、Shanghai Circuit (`2021`) / Grand Prix (`2027`) |
 | RR-005 | 已完成 | 建立 RaceRoom 配置、版本化 schema、日志字段和读写 feature flag |
-| RR-101 | 已完成（离线） | ctypes 对齐官方 API 3.5，来源提交 `29a3e958...` |
+| RR-101 | 已完成（API 3.6） | ctypes 对齐官方 API 3.6，完整结构 44,024 字节，来源提交 `e57a72fc...`；minor 版本采用严格匹配 |
 | RR-102 | 已完成（离线） | 只打开已存在的 `$R3E` map；包含版本/偏移校验和 tick 前后重读 |
-| RR-103 | 已完成（首轮实测） | API 3.5；3 秒读取 1,127 个新帧，约 375.6 Hz，0 timeout、0 tick reset；报告位于 ignored outputs 目录 |
+| RR-103 | 已完成（API 3.6 实测） | 2026-10-31 读取 60 秒、11,526 帧（约 192 Hz），0 序号重置；完整记录位于 ignored outputs 目录 |
 | RR-104 | 已完成（低速首轮） | 受控直行/左转/右转完成；冻结线性轴、角速度伪向量变换和 X/Z 世界水平面，高速复核列为 M2 验收项 |
 | RR-105 | 已完成 | 去身份化 typed Parquet 录制器、7,492 行真实 fixture，以及 step/accelerated/real-time replay 均已实现并离线验证 |
 | RR-106 | 已完成（pilot v1） | `TelemetryFrame` mapper 发布经验证的 linear/angular/orientation 变换及 availability；缺失字段仍使用 `None` |
@@ -73,6 +73,16 @@ C:\Users\freedom\anaconda3\envs\p309\python.exe scripts\raceroom_probe.py `
 - 测试最高速度：`0.2333 m/s`；结束速度：`0.0064 m/s`；结束挡位：1。
 - 结果：`outputs/raceroom_m2/keyboard_control_test_scancode.json`（ignored output）。
 - `Features.raceroom_control` 继续保持 `false`；当前入口仅用于显式 armed 的离线低速工程验证。
+
+## API 3.6 兼容性复核（2026-10-31）
+
+- 官方 `r3e.h` 当前提交：`e57a72fcafd74fcb1b0e7b5ca38a1a0aa59d74cb`。
+- API 3.6 在既有字段之后追加 7 个 start-procedure 字段（28 字节），并将两个原保留字段明确为 `start_mode` 和 `start_group_count`；已有字段偏移不变。
+- Python 结构现为 44,024 字节，保留 `all_drivers_offset=2008`、`driver_data_size=328` 和 tick offset `44`。reader 默认严格要求 API 3.6，避免未经 ABI 复核就接受其他 minor 版本。
+- 实时 3.6 只读探针通过；新起步字段现在也包含在探针 JSON 中。
+- 60 秒遥测：11,526 行、约 192.1 Hz、1 次 timeout、208 次 torn-read retry、0 次 sequence reset。油门、刹车和转向输入全程为零；本次未写入任何控制。
+- 文件：`outputs/raceroom_m1/first_validation_20261031.parquet`、同名 `.metadata.json` 与 `.analysis.json`（ignored outputs）。
+- RaceRoom 专项单元测试：23 项通过。
 
 ## RR-104 轴向结论
 

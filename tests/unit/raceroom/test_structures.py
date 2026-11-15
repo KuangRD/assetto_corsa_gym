@@ -12,13 +12,13 @@ from assetto_corsa_gym.RaceRoom.structures import (
 
 
 class OfficialLayoutTests(unittest.TestCase):
-    """Fixtures cross-checked with the official API 3.5 C# layout."""
+    """Fixtures cross-checked with the official API 3.6 C header layout."""
 
     def test_struct_sizes(self):
         self.assertEqual(ctypes.sizeof(R3EPlayerData), 560)
         self.assertEqual(ctypes.sizeof(R3EDriverInfo), 128)
         self.assertEqual(ctypes.sizeof(R3EDriverData), 328)
-        self.assertEqual(SHARED_MEMORY_SIZE, 43996)
+        self.assertEqual(SHARED_MEMORY_SIZE, 44024)
 
     def test_key_offsets(self):
         expected = {
@@ -42,6 +42,15 @@ class OfficialLayoutTests(unittest.TestCase):
             "steer_input_raw": 1524,
             "num_cars": 2008,
             "all_drivers_data": 2012,
+            "start_mode": 828,
+            "start_group_count": 832,
+            "formation_speed_limit": 43996,
+            "formation_pace_floor": 44000,
+            "start_corridor_lap_distance": 44004,
+            "formation_side": 44008,
+            "formation_follow_slot_id": 44012,
+            "pitlane_start_delay_remaining": 44016,
+            "start_penalty_pending": 44020,
         }
         for field, offset in expected.items():
             with self.subTest(field=field):

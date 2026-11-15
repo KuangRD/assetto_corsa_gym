@@ -1,7 +1,7 @@
-"""Packed ctypes translation of the official RaceRoom API 3.5 layout.
+"""Packed ctypes translation of the official RaceRoom API 3.6 layout.
 
 Source: https://github.com/kwstudios-sweden/r3e-api/blob/
-29a3e9587d95edf70f6e32e40db317c6a9d0d5ef/sample-c/src/r3e.h
+e57a72fcafd74fcb1b0e7b5ca38a1a0aa59d74cb/sample-c/src/r3e.h
 
 The upstream repository is released under the Unlicense.  Field order and
 packing in this module are ABI, not style: changing either breaks mapped data.
@@ -267,8 +267,8 @@ class R3EShared(PackedStructure):
         ("session_time_duration", Float32),
         ("session_time_remaining", Float32),
         ("max_incident_points", Int32),
-        ("event_unused1", Float32),
-        ("event_unused2", Float32),
+        ("start_mode", Int32),
+        ("start_group_count", Int32),
         ("pit_window_status", Int32),
         ("pit_window_start", Int32),
         ("pit_window_end", Int32),
@@ -386,6 +386,13 @@ class R3EShared(PackedStructure):
         ("car_damage", R3ECarDamage),
         ("num_cars", Int32),
         ("all_drivers_data", R3EDriverData * MAX_DRIVERS),
+        ("formation_speed_limit", Float32),
+        ("formation_pace_floor", Float32),
+        ("start_corridor_lap_distance", Float32),
+        ("formation_side", Int32),
+        ("formation_follow_slot_id", Int32),
+        ("pitlane_start_delay_remaining", Float32),
+        ("start_penalty_pending", Int32),
     ]
 
 
