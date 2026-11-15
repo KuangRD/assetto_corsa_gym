@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+@AGENTS.md
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -40,11 +42,6 @@ python train.py load_offline_data=True Agent.use_offline_buffer=True dataset_pat
 
 # Enable Weights & Biases logging
 python train.py disable_wandb=False wandb_entity=<user> wandb_project=sac
-```
-
-### Verify Setup
-```bash
-python test_environment_setup.py
 ```
 
 Notebooks for manual testing (require AC running):
