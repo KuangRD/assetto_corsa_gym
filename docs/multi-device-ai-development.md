@@ -1,287 +1,181 @@
-# 三台开发设备与 AI 工具协作开发方案
+# 多设备与 AI 协作开发方案（Assetto Corsa Gym）
 
-> 适用项目：Assetto Corsa Gym（AC_gym）。本方案以 Git 作为代码事实来源，以各设备独立工作区进行开发，以 Windows Assetto Corsa 主机执行依赖模拟器的任务，以可追溯实验记录管理训练结果。
->
-> 项目现状依据：Python 3.9.23 / PyTorch 1.12.1 / CUDA Toolkit 11.6 的 Conda 环境 `p309`；Assetto Corsa 插件运行于游戏内嵌 Python 3.3；环境、训练命令和插件数据流见仓库 `CLAUDE.md`、`environment.yml` 与 README。设备能力和网络条件因人而异，首次落地时应验证再固定具体主机名、GPU 与目录。
+> 适用项目：`assetto_corsa_gym`（基于 dasGringuen/assetto_corsa_gym 的 fork）。
+> 本文档是修订版，替代先前的通用方案。它只保留本项目实际需要、并且已在仓库中核实的部分。
 
-## 1. 设计目标与原则
+## 1. 原则
 
-1. 三台设备各有自己的克隆、环境和本机配置，代码通过 Git 同步，不用网盘同步活跃仓库。
-2. 同一时刻由一个工作区负责一个功能分支；AI 修改在独立分支或 Git worktree 中完成，合并前经过差异审阅和适当验证。
-3. 将“开发与分析”同“运行 Assetto Corsa 的仿真”分开。MacBook Pro 可进行算法、数据、文档、静态检查和可移植测试；需启动游戏、vJoy 或验证实时插件的工作由 Windows 设备执行。
-4. 代码、配置、随机种子、数据版本、检查点和评估指标之间建立可追溯关系。大模型文件、检查点、轨迹和缓存不进入 Git。
-5. 优先采用简单、可恢复的方式：私有远程 Git 仓库、SSH 远程执行、清晰的分支约定和可重放命令。按需要再加自动化和制品存储。
+1. **Git 是代码的唯一事实来源。** 活跃仓库不放进 OneDrive、iCloud、Dropbox 或 Syncthing 的双向同步目录。
+2. **运行 Assetto Corsa 的任务只在 Windows 上执行。** 模拟器、插件、vJoy、屏幕采集和 GPU 训练都只在两台 Windows 机器上进行。
+3. **同一分支同一时刻只在一台机器上编辑。** 交接通过推送 `wip/` 分支完成。
+4. **大文件与机器相关内容不进 Git。** 数据集、检查点、`outputs/` 和本机路径都留在本地。
+5. **AI 工具的项目规则只写一份。** 以仓库内的 `AGENTS.md` 为准，`CLAUDE.md` 引用它。
 
-## 2. 建议拓扑与设备职责
+## 2. 设备分工
 
-```text
-                        私有 Git 远程仓库
-                       (代码与审查的事实来源)
-                        /       |       \
-                       /        |        \
-       Windows 移动工作站   Windows 台式机    MacBook Pro
-       AC联调/移动开发       主仿真/训练节点      算法/分析/审查
-                \             |             /
-                 \---- SSH / Git / 制品目录 ----/
-                               |
-                    实验记录、检查点、评估结果
-```
-
-| 设备 | 默认职责 | 适合执行 | 不应假设 |
+| 设备 | 角色 | 是否运行 AC | 是否编辑代码 |
 |---|---|---|---|
-| Windows 台式机 | 主仿真和训练节点 | Assetto Corsa、插件、vJoy、GPU 训练、长时间评估；在固定目录保留稳定基线 | 不假设机器永远在线；训练中的工作树不能直接被另一个任务改动 |
-| Windows 移动工作站 | AC 联调和移动开发、备用执行节点 | 接口和插件调试、短验证、离线工作；需要时承接短任务或备用训练 | 不假设与台式机拥有相同 GPU、AC 安装盘符、控制器或游戏配置 |
-| MacBook Pro | 便携开发与分析节点 | 算法/数据代码、文档、代码审查、纯 Python 测试、结果绘图、远程连接 Windows 节点 | macOS 不能替代 Windows 上的 AC 游戏、Windows vJoy 或完整实时闭环验收；Apple Silicon 与 CUDA 环境不同 |
+| Windows 台式机 | 主仿真与训练节点；保存稳定的实验目录与 `outputs/` | 是 | 是 |
+| Windows 移动工作站 | AC 插件联调、短验证、备用训练节点 | 是 | 是 |
+| MacBook Pro | 资料查询、文献与商业计划撰写 | 否 | 否 |
 
-建议将台式机设为默认训练主机、移动工作站设为 AC 插件联调主机、MacBook 设为随身开发与远程控制终端。若实际显卡或可用时间不同，可以调换训练主机，但只保留一个“默认写入实验结果”的节点规则。
+Mac 不参与仓库的开发、运行和 AI 编码。商业计划书（`docs/商业计划书_BP.md`）属于个人文档，不应留在项目仓库里，见第 4 节。
 
-## 3. 仓库与分支管理
+## 3. 仓库与分支
 
-### 3.1 远程仓库和每台设备
+### 3.1 远程
 
-- 将私有远程仓库（例如 GitHub 私有仓库或自托管 Git）设为唯一共享代码来源。启用双因素验证、SSH 密钥和分支保护；`main` 保持可复现、可运行。
-- 三台设备分别克隆仓库。不要把整个工作目录放入 OneDrive、iCloud、Dropbox 或 Syncthing 的双向同步目录；这些工具无法安全协调并发 Git 元数据、虚拟环境、模拟器文件和大量训练写入。
-- 各设备配置 Git 用户名、邮箱、SSH key 和行尾策略。仓库采用 `.gitattributes` 统一文本行尾，保留二进制资源的原样处理；提交前确认没有把大文件、密钥、个人路径或未授权数据加入版本控制。
-- 使用小而聚焦的分支，例如 `feat/reward-normalization`、`fix/plugin-timeout`、`docs/multi-device-workflow`。一次提交表达一个逻辑改动；描述中记录目的、验证命令和已知限制。
-- 可用 PR 审查，也可个人项目采用本地审阅后推送；无论如何，先将功能分支推到远程，再在其他设备检出，避免靠 U 盘或聊天附件传代码。
+- `origin`：`https://github.com/KuangRD/assetto_corsa_gym.git`（fork，日常推送到这里）。
+- `upstream`：`https://github.com/dasGringuen/assetto_corsa_gym.git`（上游，已于本地添加）。上游可能已停止更新，同步是可选的。
 
-常用同步流程：
+需要同步上游时：
 
 ```bash
-# 开始工作
- git switch main
- git pull --ff-only
- git switch -c feat/short-name
-
-# 完成后
- git status --short
- git diff --check
- git diff
- git add <明确的文件>
- git commit -m "feat: describe the change"
- git push -u origin feat/short-name
+git fetch upstream
+git switch -c sync/upstream-YYYY-MM-DD main
+git merge upstream/main          # 或 rebase，按冲突情况决定
+# 检查通过后再合并到 main，不直接在 main 上合并上游
 ```
 
-合并后，在其他设备执行 `git fetch`，然后在各自工作区切回 `main` 并 `git pull --ff-only`。避免在不同机器对同一分支同时提交；需要并行时，给每项工作独立分支。
+### 3.2 分支约定
 
-### 3.2 Git worktree 与 AI 隔离
+- `main`：可运行的稳定分支。
+- `feat/<name>`：功能分支，例如 `feat/raceroom-shared-memory`。
+- `wip/<machine>-<date>`：交接用分支，例如 `wip/handoff-2026-11-15`。在离开某台机器前推送，到另一台机器后检出。
+- `sync/upstream-<date>`：上游同步分支。
 
-Worktree 是同一个仓库对象数据库的多个工作目录，适合让不同 AI 或任务并行修改不同分支。一个简单布局：
+### 3.3 当前状态
 
-```text
-Projects/
-├── AC_gym/                 # 人类集成与稳定分支
-├── AC_gym-codex/           # Codex 的任务分支
-├── AC_gym-claude/          # Claude 的任务分支
-└── AC_gym-harness/         # DeepSeek Harness 的任务分支
+本次交接已在本地创建 `wip/handoff-2026-11-15`，包含 RaceRoom 迁移的未完成改动、遥测对比工具以及本方案文档。**该分支需要在一台能访问 GitHub 的 Windows 机器上手动推送**，因为本次操作的环境无法完成 GitHub 认证：
+
+```bash
+git push -u origin wip/handoff-2026-11-15
 ```
 
-示例（先在仓库确认 `main` 是默认集成分支）：
+`商业计划书_BP.md` 没有被提交，这是有意的。
+
+## 4. 仓库卫生
+
+需要在 `main` 合并前完成的修改：
+
+- **`.gitignore` 显式添加**：`AssettoCorsaGymDataSet/`、`outputs/`（已有 `output/`，需确认两个目录的用途）。当前数据集目录被忽略，但没有对应规则，属于偶然状态。
+- **`.gitattributes` 补充二进制声明**：`*.png`、`*.jpg`、`*.pkl`、`*.pyd`、`*.dll` 等显式标为 `binary`。
+- **`test_environment_setup.py` 引用**：`CLAUDE.md` 提到该文件，但仓库中不存在。要么补上，要么删除引用。
+- **`windows-libs/`**：仓库中提交了 Windows 上的 Python 3.12 运行时（`.dll`、`.pyd`）。它与插件使用的 Python 3.3 不同。**待确认用途后再决定保留、移除或迁出**，本方案不做改动。
+- **商业计划书**：建议移到仓库外，例如 `Documents\商业计划书\`，并加入 `.gitignore` 作为兜底。Mac 上的资料也应放在仓库外。
+- **Git 历史中的大文件**：`windows-libs/` 与带输出的 notebook（如 `ks_barcelona-layout_gp-racing_line.ipynb`，约 1.4 MB）会占用历史空间。暂不改写历史，记录即可。
+
+## 5. 环境
+
+- 两台 Windows 机器各自用 `environment.yml` 创建 conda 环境 `p309`（Python 3.9.23、PyTorch 1.12.1、CUDA Toolkit 11.6）。
+- 不提交环境目录。版本变更只改 `environment.yml` 与 `requirements.txt`，并在两台机器上验证。
+- 插件运行于游戏内嵌的 Python 3.3。修改插件代码时，避免使用 3.4 之后的语法，并在 AC 环境中验证。
+- 插件配置中的解释器路径、端口和屏幕采集开关是机器相关的，应放进本机配置，而不是直接修改已跟踪的 `config.py`。可以提供 `*.example` 模板。
+
+## 6. 数据与实验
+
+### 6.1 数据集
+
+数据集（约 764 MB）从 Hugging Face 下载，各台 Windows 机器各存一份：
+
+```bash
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='dasgringuen/assettoCorsaGym', repo_type='dataset', local_dir='AssettoCorsaGymDataSet', allow_patterns='AssettoCorsaConfigs/tracks/*')"
+```
+
+数据集不通过 Git 传输。
+
+### 6.2 实验记录
+
+- **规范位置**：`docs/experiments/<日期>_<简称>/`，已有的 `docs/experiments/fastest_line_20261004/` 作为范例。仓库内只放轻量的结果摘要与 `manifest.json`。
+- **检查点与原始输出**：放在 `outputs/`，不进 Git，每台机器各自管理。
+- **根目录散落的训练评估文档**（如 `100万步训练效果评估.md`）暂不移动，等主线稳定后再统一迁入 `docs/experiments/`。
+
+每次训练生成的 `manifest.json` 至少包含：`run_id`、主机名、代码 commit SHA 及是否有未提交改动、`environment.yml` 的版本、赛道与车辆、覆盖的命令行参数、随机种子、恢复的检查点来源、日志路径。
+
+## 7. AI 工具分工
+
+### 7.1 规则入口
+
+- 新建 `AGENTS.md`，包含项目结构、运行命令、哪些文件不能改、验证边界、提交规范。
+- `CLAUDE.md` 改为引用 `AGENTS.md`，只保留 Claude Code 专属的内容。
+
+### 7.2 各工具定位
+
+| 工具 | 定位 | 说明 |
+|---|---|---|
+| Codex | 仓库内的实现与修复 | 在独立 worktree 中工作，交付可审查的 diff |
+| Claude Code | 仓库内的实现、审查与文档 | 同上；审查时优先只读 |
+| DeepSeek Harness | 资料整理、日志汇总、周报等非核心任务 | 官方页面未说明会读取 `AGENTS.md`、不说明 worktree 与隔离机制，**在验证通过之前不用于修改代码** |
+
+DeepSeek Harness 的官方说明中，平台包括 Windows 64 位桌面端，并提供 `npx @deepseek-ai/dsh web` 的 Web UI。它支持定时任务，但没有文档化的隔离机制，所以定时任务不应指向正在训练的工作树。
+
+### 7.3 DeepSeek Harness 验证清单
+
+1. 在一个临时 worktree 中，让它读取一条只写在 `AGENTS.md` 中的规则，观察它是否遵守。
+2. 让它只修改 worktree 内的文件，确认不会写入主工作树。
+3. 确认它的定时任务无法在训练期间修改 `outputs/` 或当前工作树。
+4. 三项都通过后，再考虑把它用于代码任务。
+
+### 7.4 worktree 布局
+
+同一仓库在 Windows 上可以用多个 worktree 隔离 AI 任务，但它们不隔离游戏实例、端口、GPU 和 `outputs/`。并行运行模拟器与训练时必须人工确认资源互不冲突。
 
 ```bash
 git fetch origin
 git worktree add ../AC_gym-codex -b feat/codex-task origin/main
-git worktree add ../AC_gym-claude -b feat/claude-task origin/main
-git worktree list
 ```
 
-结束任务后先提交或保存必要修改，再从主仓库执行：
+## 8. 交接流程
 
-```bash
-git worktree remove ../AC_gym-codex
-git branch -d feat/codex-task
-```
+离开机器前：
 
-不要让多个 Agent 在同一个 worktree/分支同时编辑同一文件。若工具不能直接使用 worktree，就用独立克隆。Worktree 只隔离文件和分支，并不隔离共享数据库、Assetto Corsa 实例、端口、控制器、GPU 显存或输出目录；并行运行游戏和训练前应确认这些资源互不冲突。
+1. 更新 `docs/HANDOFF.md`：当前进度、未完成步骤、下一步动作、正在运行的训练或模拟器。
+2. `git status` 确认没有误纳入大文件或个人文档。
+3. 提交到 `wip/` 分支并推送。
 
-### 3.3 仓库内协作说明
+到达另一台机器后：
 
-- 保留 `CLAUDE.md` 作为 Claude 工具的项目提示，同时维护一份面向所有工具的简短 `AGENTS.md` 或 `CONTRIBUTING.md` 入口，注明项目结构、常用命令、敏感文件、验证边界和提交规范。不要让同一规则在多处长期分叉。
-- 让 AI 阅读与任务相关的源文件和现有文档；要求先列出假设、改动范围、运行风险，再修改。完成时汇报文件、差异、验证结果和未验证部分。
-- AI 生成的代码由人检查，特别关注仿真动作安全、训练恢复、数据覆盖、路径处理、权限、网络输入和模型加载。
+1. `git fetch origin`，检出对应的 `wip/` 分支。
+2. 阅读 `docs/HANDOFF.md`。
+3. 确认 `p309` 环境与本机配置，再开始工作。
 
-## 4. 三种 AI 的分工与交接
+运行 AC 或训练前，记录当前 commit SHA。运行期间不在同一工作树切换分支或更新代码。
 
-| 工具 | 建议主责 | 适合交付 | 交接约定 |
-|---|---|---|---|
-| DeepSeek Harness | 大范围代码探索、方案拆解、实现候选、批量机械改动或辅助脚本 | 小步分支提交、改动摘要、验证命令 | 先给明确文件范围和禁止改动；跨模块改造拆成可审查的阶段 |
-| Codex | 仓库任务执行、代码实现/修复、跨文件一致性检查、将需求转成具体差异 | 可审查 diff、运行结果、风险清单 | 通过独立 worktree/分支交付；不得把未验证推断写成项目事实 |
-| Claude | 设计讨论、复杂代码审查、测试思路、文档/接口审阅 | 审查意见、边界案例、独立实现分支 | 审查者优先只读；若也要修改，使用另一分支并明确由谁集成 |
+## 9. 验证边界
 
-这不是工具能力的绝对排序；同一个任务可以交换角色。核心约束是一个任务只有一个“集成人”，一次只认领一个编辑分支。建议的标准交接卡：
+- **提交前**：`git diff --check`、相关单元测试、导入检查。
+- **Windows 验收**：涉及真实仿真、插件、端口、vJoy、屏幕采集、CUDA 或长时间训练时，在指定 Windows 机器上执行，并保存 manifest 与日志。
+- 无模拟器的单元测试可以在任一台 Windows 机器上运行。是否接入 CI，等测试稳定后再决定；CI 不需要安装完整的 PyTorch/CUDA 环境。
 
-```text
-目标：
-背景与相关文件：
-允许修改范围：
-不得修改：
-完成条件：
-建议验证：
-运行环境/是否需要 Assetto Corsa：
-分支或 worktree：
-```
+## 10. 分阶段落地
 
-推荐流转：人类定义目标 → 一个 AI 实现 → 另一个 AI 或人类审查 → 在适合的设备验证 → 人类集成并合并。不要将一个 AI 的完整聊天记录作为唯一规格；关键设计、复现命令和结论写回仓库文档或提交信息。
+**阶段 1（本周）**
 
-## 5. 跨平台环境与运行边界
+- 在一台机器上推送 `wip/handoff-2026-11-15`。
+- 另一台机器 `fetch` 并检出该分支，确认可以完整继续工作。
+- 清理第 4 节列出的仓库卫生问题，并把商业计划书移出仓库。
+- 决定 `windows-libs/` 的去留。
 
-### 5.1 Python 与依赖
+**阶段 2（随后）**
 
-- 以仓库 `environment.yml` 为基线：当前指定 `p309`、Python 3.9.23、PyTorch 1.12.1、CUDA Toolkit 11.6。安装前检查该组合与目标机器驱动、操作系统、当前依赖渠道兼容；不要在没有验证时升级 PyTorch/CUDA。
-- 不提交 `conda` 环境目录、虚拟环境或机器特定路径。Windows 与 macOS 分别创建本机环境；若确需 macOS 环境文件，维护单独的 `environment-macos.yml` 并说明其用途，不能声称它提供 CUDA 或完整 AC 运行能力。
-- 逐步把非仿真代码做成可导入、可单测模块；将 Assetto Corsa 客户端、Windows 控制依赖和真实模拟器入口做成明确可选边界。对纯算法/数据逻辑避免在导入阶段强制启动游戏、连接端口或导入 Windows 专属包。
-- 仓库记录 Python 包版本和安装步骤。安装环境后先做轻量导入/单元验证，再做连接 Assetto Corsa 的端到端检查。
+- 编写 `AGENTS.md`，改造 `CLAUDE.md`。
+- 完成 DeepSeek Harness 的验证清单。
+- 用两台机器各做一次短训练，检查 manifest 和日志是否完整。
 
-### 5.2 Assetto Corsa 插件与配置
+**暂不做**：W&B/MLflow、NAS、对象存储、远程调度、多平台 CI 矩阵。等以上两个阶段稳定后，再根据实际瓶颈决定。
 
-项目有双运行时：训练/环境客户端在 Python 3.9+；AC 插件运行于游戏内嵌 Python 3.3。修改插件时避免使用 Python 3.4 之后的语法和不兼容库，并在目标 AC 安装环境内验证。截图子进程、共享内存、UDP/TCP 端口、vJoy 配置和插件解释器路径均是机器相关项。
+## 11. 验收清单
 
-建议：
+- [ ] 两台 Windows 机器都能从 `origin` 拉取并推送 `wip/` 分支。
+- [ ] 两台机器各自的 `p309` 环境能导入项目并通过单元测试。
+- [ ] 一台 Windows 机器能启动 AC 插件并完成一次有日志的短验证。
+- [ ] 两个 AI 任务在不同 worktree 中工作，没有互相覆盖文件。
+- [ ] 一次训练的 manifest 能回答：代码版本、配置、数据、机器、种子与检查点来源。
+- [ ] 数据集与检查点有第二份备份，并已验证可读。
+- [ ] `main` 上没有个人文档、大文件或机器相关路径。
 
-- 提供不含个人绝对路径的 `*.example` 配置或配置说明；本地真实配置放在 gitignored 文件中。
-- 每台 Windows 设备分别记录 AC 安装版本/路径、插件部署方式、赛道/车辆资源版本、监听端口、vJoy 映射、Python 子进程路径和屏幕采集设置。
-- 若可以，加入只读的 `scripts/doctor` 检查：验证 Python 版本、配置文件存在、端口可用、插件文件已部署；它不应自动覆盖用户游戏配置。
-- 做完整闭环验证时一次只启动一个 AC 实例，记录所用提交 SHA、配置和赛道/车辆组合。
+## 12. 尚未确认的事项
 
-### 5.3 Mac 的角色
-
-Mac 重点用于修改与验证可移植组件、分析 CSV/遥测、绘图、审阅训练曲线、文档维护和远程提交。先验证核心算法是否能在无 CUDA、无 Assetto Corsa 的 CPU 环境导入与测试；性能训练应交给有匹配 CUDA 的 Windows 机器。若采用 Docker，仅用于纯 Python 工具/分析服务，不将容器化描述为 AC 游戏运行方案。
-
-## 6. 远程执行与文件传输
-
-1. 在训练节点启用 SSH（Windows OpenSSH Server 或经验证的安全远程方式），只允许密钥认证；防火墙仅对可信局域网或 VPN 开放，避免将游戏控制/训练服务端口直接暴露公网。
-2. Mac 与另一台 Windows 设备通过 SSH 执行状态查询、启动受控脚本和取回日志。长任务使用 `tmux`（若运行在 WSL/Linux）或 Windows 任务计划/后台 PowerShell 进程，并将标准输出和错误输出重定向到任务目录；提供查看状态、停止和恢复步骤。
-3. 远程运行前，在训练节点检出明确的提交 SHA，确认 AC 实例、配置和输出路径。运行期间不在该工作树切换分支或更新代码。
-4. 代码通过 Git 传输；实验制品通过局域网文件共享、`rsync`/SFTP 或对象存储传输。避免对仍在写入的 checkpoint 进行复制；先等待完成或复制稳定快照。
-5. 远程控制程序需有超时、停止信号、日志和明确的最大训练步数；涉及车辆实时控制时，先做低速/静止环境验证并保留人工停止方式。
-
-## 7. 实验、数据与模型管理
-
-### 7.1 分类
-
-| 类型 | 建议存放 | Git 管理 |
-|---|---|---|
-| 代码、默认配置、文档、轻量测试样例 | 仓库 | 是 |
-| 本机路径、凭据、私有 W&B key、个人 AC 配置 | 本机配置/环境变量 | 否 |
-| 数据集、轨迹、Replay Buffer、checkpoint、视频和大型日志 | 每台机器的实验目录或制品存储 | 否；仅追踪清单/元数据 |
-| 小型、可公开、必要的基准结果 | `docs/experiments/` 或 `data/` 的轻量文件 | 经审查后可以 |
-
-项目 `.gitignore` 已忽略 `output/`、`outputs/`、`results`、`data/data_sets`、pickle 和模型权重等部分产物。新增格式前确认忽略规则；在 Windows 与 macOS 上执行 `git status --short`，防止大文件误提交。不要用 Git LFS 承担不断增长的训练检查点，除非已明确配额、清理和备份策略。
-
-### 7.2 实验清单
-
-每次训练在实验目录保存机器可读的 `manifest.json`（或 YAML）和日志，至少记录：
-
-- 唯一 `run_id`、开始时间、操作者、主机名；
-- Git commit SHA、是否有未提交改动；
-- Python/Conda、PyTorch、CUDA、驱动与游戏/插件版本；
-- 赛道、车辆、天气/控制配置、奖励参数和所有覆盖的 CLI 参数；
-- 随机种子、训练步数、恢复的 checkpoint 来源；
-- 数据集来源、版本/校验和；
-- 日志位置、checkpoint 清单、评估命令与指标。
-
-建议目录：
-
-```text
-experiments/<年月>/<run_id>/
-├── manifest.json
-├── config_resolved.yml
-├── train.log
-├── metrics.csv
-├── checkpoints/
-└── evaluation/
-```
-
-实际目录可放在仓库外的大容量磁盘；仓库只保留模板和汇总结果。命名例：`2026-11-15_mx5_silverstone_seed42_<sha7>`。恢复训练时创建新的 run 记录并链接来源 checkpoint，不覆盖旧实验目录。
-
-### 7.3 备份
-
-代码由远程 Git 备份；数据、最终 checkpoint 和实验摘要采用至少两份独立副本（例如训练机本地盘 + 外部盘/异机 NAS），定期抽样恢复检查。明确哪些中间 checkpoint 可清理、保留多久、清理人是谁。没有验证副本可读之前，不删除唯一原件。
-
-## 8. CI 与验证策略
-
-CI 先做与机器无关、可快速重现的检查：格式/静态检查（若项目已选工具）、模块导入、配置解析、纯单元测试和轻量样例。CI 不应假设拥有 Assetto Corsa、vJoy、专用控制器、赛道资源、CUDA GPU 或私有数据。
-
-建议设三层验证门槛：
-
-1. **提交前**：`git diff --check`、相关 pytest、配置/导入检查；写明未运行项目规定的 `test_environment_setup.py` 时的原因。
-2. **CI**：在受支持的 Python 版本上执行无模拟器测试，检查格式和打包/依赖完整性；依赖组合成熟后再固定版本矩阵。
-3. **Windows 硬件验收**：涉及真实仿真、插件、端口、vJoy、图像捕捉、CUDA 或长时间训练时，由指定 Windows 节点执行，保存 manifest、日志和结果。将“CI 通过”和“真实仿真通过”分别记录。
-
-在修改训练/奖励/控制代码时，应选固定赛道、车辆、短步数和种子做 smoke run，再安排长训练。测试只针对改动风险和项目现有验证要求，不把短 smoke run 宣称为性能结论。
-
-## 9. 安全、权限与恢复
-
-- API key、SSH 私钥、W&B 凭据、远程主机密码和带凭据的配置不进 Git、不写入 AI 提示词或日志；使用系统凭据管理器/环境变量，并定期轮换。
-- 远程机器只开放必要服务；VPN/可信网络优先。限制 AI 对真实游戏控制、删除实验数据、安装系统驱动、更新 CUDA 和发布远程任务的权限。
-- 对训练输出采取目录隔离和最小权限；脚本避免默认覆盖既有 run。删除实验/重置仓库前必须先检查目标路径和是否有唯一数据。
-- 如果发生冲突：停止对共享文件的并发写入 → 保存各分支状态与差异 → 选择一个集成人 → 通过 rebase/merge 和人工审查逐步解决 → 在对应 OS 验证。不要用强制推送掩盖来源不明的提交。
-- 设备丢失时吊销 SSH key 和远程令牌；从远程 Git 重建代码，在新设备恢复本地依赖和配置，再从备份恢复必要的实验制品。
-
-## 10. 日常工作流程
-
-### 开始任务
-
-1. 选择一台主开发设备，确认目标分支基于最新 `main`。
-2. 写清任务边界与完成条件；涉及 AC 的任务注明需要哪台 Windows 机器。
-3. 为每个并行 AI/子任务创建单独分支和 worktree，并确认输出目录、端口、游戏实例不会冲突。
-4. 在任务开始时记录当前 commit 和本地改动。
-
-### 实现和审查
-
-1. 一个 AI 负责实现；提供精确文件范围、项目约束和验收命令。
-2. 审查 diff、危险操作、依赖和跨平台假设；必要时由另一工具只读审查。
-3. 运行与改动相关的本机检查，不能运行的硬件测试明确留待指定节点完成。
-4. 提交并推送分支；通过 PR 或集成人审查后再合并。
-
-### 仿真与训练
-
-1. 训练节点检出确定的 commit SHA，确认环境和配置，建立唯一 run 目录及 manifest。
-2. 开始短 smoke run；核验动作、遥测、奖励和日志，再启动长训练。
-3. 运行中保持代码版本和配置不变；记录异常、恢复点和人工停止情况。
-4. 结束后在同版本代码/配置下评估，备份最终检查点和汇总报告。
-
-### 切换设备
-
-在原设备提交并推送，或明确保存未提交补丁；新设备 `fetch` 后检出相应分支。重新建立本机环境、路径和凭据，不复制虚拟环境。需要远程实验时，通过 manifest 中的 SHA 和配置确认实验版本。
-
-## 11. 分阶段落地
-
-### 阶段 1：代码可接手（半天至一天）
-
-- 确认/建立私有远程仓库，三台设备都能 SSH 拉取和推送。
-- 确认 `.gitignore` 覆盖实验输出、环境、数据和模型；检查 Git 工作区中没有误纳入的大文件或密钥。
-- 三台设备分别克隆；Windows 两台按 `environment.yml` 建立环境，Mac 建立仅用于可移植开发的环境。
-- 写一页本机配置清单：OS、GPU、Python、AC 路径、端口、vJoy、数据盘位置。
-
-### 阶段 2：安全并行（1–2 天）
-
-- 约定分支和提交规范，试用两个 AI 在不同 worktree 完成小任务。
-- 增加通用 Agent 项目说明入口，并整理 `CLAUDE.md` 中重复或机器专属的信息。
-- 添加配置模板和运行前检查；确认独立 worktree 不会共享同一输出目录或端口。
-
-### 阶段 3：远程训练可追踪（2–4 天）
-
-- 配置训练节点 SSH、日志目录和有停止方法的启动脚本。
-- 加入 run manifest、配置快照、代码 SHA 与评估结果记录。
-- 试运行一个固定 seed 的短任务，验证日志、恢复 checkpoint、传输结果和备份恢复。
-
-### 阶段 4：自动验证和优化（持续）
-
-- 将纯 Python/配置检查接入 CI；逐步隔离需要游戏的集成测试。
-- 建立最小基准集、结果汇总页面/脚本和 checkpoint 保留政策。
-- 依据实际瓶颈再考虑容器、对象存储、NAS、W&B/MLflow、GPU 节点调度；先明确备份、费用、访问权限和维护责任。
-
-## 12. 首周验收清单
-
-- [ ] 三台设备可分别从远程仓库克隆、拉取、推送一个测试分支。
-- [ ] Windows 节点可启动 AC 插件并完成一次有日志的短验证。
-- [ ] Mac 可以在不安装 AC 的情况下完成可移植代码的导入/测试与结果分析。
-- [ ] 两个 AI 任务在不同分支/worktree 工作，没有覆盖彼此文件。
-- [ ] 训练记录能回答：使用了什么代码、配置、数据、机器、种子与 checkpoint？
-- [ ] 检查点和关键结果有第二份可读备份。
-- [ ] 仓库 CI 检查不要求模拟器、私有数据或个人机器路径。
-
-## 13. 需要按实际情况补齐的参数
-
-首次实施时将以下占位信息写进本机私有运维笔记（不要提交凭据）：远程仓库 URL、三台主机名与局域网/VPN 地址、各自 GPU/显存、AC 与赛道资源版本、训练磁盘路径、SSH 用户、备份目的地、CI 服务和实验制品保留周期。地址或密钥变更时更新运维笔记并吊销旧凭据。
+- `windows-libs/` 的用途与去留。
+- GitHub 上 fork 的可见性（公开仓库意味着已跟踪文件全部公开）。
+- DeepSeek Harness 的 `AGENTS.md` 读取行为与 worktree 行为，需按第 7.3 节验证。
